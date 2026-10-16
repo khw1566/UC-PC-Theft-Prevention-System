@@ -12,6 +12,8 @@ PCGUARD_OVERDUE_DAYS = "8"
 # 학교 공인 IP 대역 (쉼표로 구분, 비우면 학교 밖 감지 끔)
 PCGUARD_SCHOOL_NETWORKS = ""
 PCGUARD_VAPID_SUBJECT = "mailto:admin@audreaming.com"
+# 안드로이드 앱(android/) 서명 키의 SHA-256 지문 (쉼표로 구분). 비우면 앱이 주소창이 보이는 탭으로 열립니다.
+PCGUARD_ANDROID_CERT_SHA256 = "23:FC:89:61:45:1A:2A:CE:4F:3D:58:45:28:DC:B1:09:E6:8E:9C:3D:43:24:06:96:D9:FA:A9:36:12:19:00:F9"
 # 비밀값은 wrangler secret put 으로 넣습니다: PCGUARD_API_KEY, PCGUARD_ADMIN_KEY, PCGUARD_WEBHOOK_URL(선택)
 
 [[d1_databases]]

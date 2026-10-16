@@ -151,3 +151,13 @@ test("dashboard page and assets are served", async () => {
   assert.equal((await s.request("GET", "/manifest.webmanifest")).headers.get("content-type"), "application/manifest+json");
   assert.equal((await s.request("GET", "/api/nope")).status, 404);
 });
+
+test("serves Digital Asset Links for the Android app", async () => {
+  const empty = await makeServer().request("GET", "/.well-known/assetlinks.json");
+  assert.deepEqual(await empty.json(), []);
+
+  const s = makeServer({ PCGUARD_ANDROID_CERT_SHA256: "aa:bb, CC:DD" });
+  const [link] = await (await s.request("GET", "/.well-known/assetlinks.json")).json();
+  assert.equal(link.target.package_name, "com.audreaming.pcguard");
+  assert.deepEqual(link.target.sha256_cert_fingerprints, ["AA:BB", "CC:DD"]);
+});
