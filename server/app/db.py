@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS machines (
     last_alert_sig  TEXT,
     overdue_alerted INTEGER NOT NULL DEFAULT 0,
     subnet          TEXT,
-    remote_ip       TEXT
+    remote_ip       TEXT,
+    offsite_alerted INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS alerts (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,7 +48,24 @@ def connect(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+# 예전 버전으로 만든 DB에 나중에 생긴 열을 채워 넣습니다.
+MACHINE_COLUMNS = {
+    "subnet": "TEXT",
+    "remote_ip": "TEXT",
+    "offsite_alerted": "INTEGER NOT NULL DEFAULT 0",
+}
+
+
+def _migrate(conn) -> None:
+    existing = {r["name"] for r in conn.execute("PRAGMA table_info(machines)")}
+    with conn:
+        for name, decl in MACHINE_COLUMNS.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE machines ADD COLUMN {name} {decl}")
 
 
 def get_machine(conn, machine_id: str):
@@ -70,6 +88,10 @@ def update_last_report(conn, report: dict, alert_sig: str | None, subnet: str | 
         (report.get("hostname"), json.dumps(report, ensure_ascii=False), now(), alert_sig, subnet, remote_ip,
          report["machine_id"]),
     )
+
+
+def set_offsite_alerted(conn, machine_id: str, value: bool) -> None:
+    conn.execute("UPDATE machines SET offsite_alerted = ? WHERE machine_id = ?", (int(value), machine_id))
 
 
 def accept_baseline(conn, machine_id: str) -> bool:

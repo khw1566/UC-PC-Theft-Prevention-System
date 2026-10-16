@@ -11,6 +11,7 @@ class Settings:
     overdue_days: int = 8  # 이 기간 동안 보고가 없으면 '연락 두절'
     vapid_private_pem: str | None = None  # 웹 푸시 서명 키 (없으면 자동 생성해 DB에 저장)
     vapid_subject: str = "mailto:admin@audreaming.com"
+    school_networks: tuple[str, ...] = ()  # 학교의 공인 IP 대역 (비우면 학교 밖 감지 끔)
 
 
 def load_settings() -> Settings:
@@ -22,4 +23,5 @@ def load_settings() -> Settings:
         overdue_days=int(os.environ.get("PCGUARD_OVERDUE_DAYS", "8")),
         vapid_private_pem=os.environ.get("PCGUARD_VAPID_PRIVATE_PEM") or None,
         vapid_subject=os.environ.get("PCGUARD_VAPID_SUBJECT", "mailto:admin@audreaming.com"),
+        school_networks=tuple(n.strip() for n in os.environ.get("PCGUARD_SCHOOL_NETWORKS", "").split(",") if n.strip()),
     )

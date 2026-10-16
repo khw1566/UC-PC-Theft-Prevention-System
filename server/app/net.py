@@ -22,3 +22,14 @@ def primary_subnet(report: dict, remote_ip: str | None = None) -> str | None:
         if ip.version == 4:
             return str(ipaddress.ip_network(f"{ip}/24", strict=False))
     return None
+
+
+def outside_school(remote_ip: str | None, school_networks: tuple[str, ...]) -> bool:
+    """보고가 학교 공인 IP 대역 밖에서 왔는지 봅니다. 대역 설정이 없거나 IP를 모르면 판단하지 않습니다."""
+    if not school_networks or not remote_ip:
+        return False
+    try:
+        ip = ipaddress.ip_address(remote_ip)
+    except ValueError:
+        return False
+    return not any(ip in ipaddress.ip_network(n, strict=False) for n in school_networks)
