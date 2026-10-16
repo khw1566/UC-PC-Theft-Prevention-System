@@ -37,7 +37,7 @@ if (-not $ServerUrl -or -not $ApiKey) {
 }
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-'collect.ps1', 'menu.ps1', 'tray.ps1' | ForEach-Object { Copy-Item (Join-Path $PSScriptRoot $_) $InstallDir -Force }
+'collect.ps1', 'menu.ps1', 'tray.ps1', 'uninstall.ps1' | ForEach-Object { Copy-Item (Join-Path $PSScriptRoot $_) $InstallDir -Force }
 
 [ordered]@{ server_url = $ServerUrl; api_key = $ApiKey } |
     ConvertTo-Json | Set-Content -Path (Join-Path $InstallDir 'config.json') -Encoding UTF8
@@ -66,16 +66,20 @@ $runAs = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $atStartup, $weekly `
     -Settings $settings -Principal $runAs -Force | Out-Null
 
-# 관리 메뉴(GUI) 바로가기. 관리자 권한으로만 열리게 해서 학생 계정은 UAC에서 막힙니다.
-$shortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\PCGuard 관리 메뉴.lnk'
-$lnk = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcut)
-$lnk.TargetPath = 'powershell.exe'
-$lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$(Join-Path $InstallDir 'menu.ps1')`""
-$lnk.IconLocation = 'imageres.dll,-1028'
-$lnk.Save()
-$bytes = [IO.File]::ReadAllBytes($shortcut)
-$bytes[0x15] = $bytes[0x15] -bor 0x20   # '관리자 권한으로 실행' 플래그
-[IO.File]::WriteAllBytes($shortcut, $bytes)
+# 시작 메뉴 바로가기. 관리자 권한으로만 열리게 해서 학생 계정은 UAC에서 막힙니다.
+function New-AdminShortcut([string]$Name, [string]$Arguments, [string]$Icon) {
+    $path = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\$Name.lnk"
+    $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut($path)
+    $lnk.TargetPath = 'powershell.exe'
+    $lnk.Arguments = $Arguments
+    $lnk.IconLocation = $Icon
+    $lnk.Save()
+    $bytes = [IO.File]::ReadAllBytes($path)
+    $bytes[0x15] = $bytes[0x15] -bor 0x20   # '관리자 권한으로 실행' 플래그
+    [IO.File]::WriteAllBytes($path, $bytes)
+}
+New-AdminShortcut 'PCGuard 관리 메뉴' "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$(Join-Path $InstallDir 'menu.ps1')`"" 'imageres.dll,-1028'
+New-AdminShortcut 'PCGuard 제거' "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $InstallDir 'uninstall.ps1')`"" 'imageres.dll,-5305'
 
 # 작업표시줄 알림 영역 아이콘: 모든 사용자가 로그인할 때 시작합니다.
 $trayLnk = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\StartUp\PCGuard.lnk'

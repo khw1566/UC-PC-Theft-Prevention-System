@@ -1,7 +1,8 @@
 ﻿<#
 .SYNOPSIS
     배포 패키지를 dist/에 만듭니다.
-    - PCGuard-Client.zip: 학교 PC용. 압축을 풀고 install.bat을 더블클릭하면 설치됩니다.
+    - PCGuard-Setup.exe: 학교 PC용. 더블클릭하면 설치됩니다.
+    - PCGuard-Client.zip: 같은 내용의 압축본. 압축을 풀고 install.bat을 더블클릭하면 설치됩니다.
     - PCGuard.apk: 관리자 휴대폰용 앱.
 
 .DESCRIPTION
@@ -52,7 +53,7 @@ PCGuard 학교 PC 설치 패키지
   - 작업표시줄 알림 영역에 PCGuard 방패 아이콘이 뜹니다. 우클릭하면 상태 보기, 지금 보고, 관리 메뉴가 있습니다.
     안 보이면 작업표시줄 오른쪽의 ^ 를 눌러 아이콘을 작업표시줄로 끌어다 놓으세요.
   - 요일/시간 변경은 관리자 PowerShell에서 .\install.ps1 -WeeklyDay Friday -WeeklyTime 16:00
-제거: uninstall.bat을 더블클릭하세요.
+제거: 시작 메뉴의 'PCGuard 제거' 또는 uninstall.bat.
 
 서버: $ServerUrl
 config.json에 클라이언트 키가 들어 있으니 학교 PC 설치용으로만 쓰세요.
@@ -63,6 +64,33 @@ $zip = Join-Path $dist 'PCGuard-Client.zip'
 if (Test-Path $zip) { Remove-Item -Force $zip }
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip
 Write-Host "PC 패키지: $zip"
+
+# 같은 파일을 Windows 기본 도구 IExpress로 묶어 더블클릭 한 번에 설치되는 EXE를 만듭니다.
+# IExpress는 따옴표로 감싼 SED 경로를 읽지 못하므로 그대로 넘깁니다. EXE는 임시 폴더에 풀고 install.bat을 실행하며, install.bat이 관리자 권한을 요청합니다.
+$exe = Join-Path $dist 'PCGuard-Setup.exe'
+if (Test-Path $exe) { Remove-Item -Force $exe }
+$files = Get-ChildItem $stage -File | Sort-Object Name
+$sed = Join-Path $dist 'PCGuard-Setup.sed'
+$lines = @(
+    '[Version]', 'Class=IEXPRESS', 'SEDVersion=3',
+    '[Options]', 'PackagePurpose=InstallApp', 'ShowInstallProgramWindow=0', 'HideExtractAnimation=1',
+    'UseLongFileName=1', 'InsideCompressed=0', 'CAB_FixedSize=0', 'CAB_ResvCodeSigning=0', 'RebootMode=N',
+    'InstallPrompt=%InstallPrompt%', 'DisplayLicense=%DisplayLicense%', 'FinishMessage=%FinishMessage%',
+    'TargetName=%TargetName%', 'FriendlyName=%FriendlyName%', 'AppLaunched=%AppLaunched%',
+    'PostInstallCmd=%PostInstallCmd%', 'AdminQuietInstCmd=%AdminQuietInstCmd%',
+    'UserQuietInstCmd=%UserQuietInstCmd%', 'SourceFiles=SourceFiles',
+    '[Strings]', 'InstallPrompt=', 'DisplayLicense=', 'FinishMessage=',
+    "TargetName=$exe", 'FriendlyName=PCGuard Setup', 'AppLaunched=cmd /c install.bat',
+    'PostInstallCmd=<None>', 'AdminQuietInstCmd=', 'UserQuietInstCmd='
+)
+for ($i = 0; $i -lt $files.Count; $i++) { $lines += "FILE$i=`"$($files[$i].Name)`"" }
+$lines += '[SourceFiles]', "SourceFiles0=$stage\", '[SourceFiles0]'
+for ($i = 0; $i -lt $files.Count; $i++) { $lines += "%FILE$i%=" }
+Set-Content -Path $sed -Value $lines -Encoding Default
+Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\iexpress.exe') -ArgumentList '/N', '/Q', $sed -Wait
+Remove-Item $sed
+if (-not (Test-Path $exe)) { throw 'IExpress가 EXE를 만들지 못했습니다.' }
+Write-Host "PC 설치 EXE: $exe"
 
 $android = Join-Path $root 'android'
 $apk = Join-Path $android 'app\build\outputs\apk\release\app-release.apk'

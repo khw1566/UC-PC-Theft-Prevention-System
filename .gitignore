@@ -5,3 +5,6 @@ __pycache__/
 *.db
 client/config.json
 dist/
+PCGuard-Client*/
+PCGuard-Client*.zip
+PCGuard-Setup*.exe
