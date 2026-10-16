@@ -19,7 +19,7 @@ PCGUARD_ANDROID_CERT_SHA256 = "23:FC:89:61:45:1A:2A:CE:4F:3D:58:45:28:DC:B1:09:E
 [[d1_databases]]
 binding = "DB"
 database_name = "pcguard"
-database_id = "여기에-wrangler-d1-create-가-알려준-id"
+database_id = "77ec3752-87a7-471f-a2f7-8bd2bc267c34"
 migrations_dir = "migrations"
 
 # 대시보드 화면은 기존 서버와 같은 파일을 씁니다.
