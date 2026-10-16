@@ -47,10 +47,18 @@ export PCGUARD_API_KEY=$(openssl rand -hex 24)     # 클라이언트용
 export PCGUARD_ADMIN_KEY=$(openssl rand -hex 24)   # 대시보드 로그인용
 export PCGUARD_WEBHOOK_URL=https://discord.com/api/webhooks/...   # 선택
 export PCGUARD_DB=/var/lib/pcguard/pcguard.db
+export PCGUARD_SCHOOL_NETWORKS=203.0.113.0/24,198.51.100.7   # 학교 공인 IP 대역 (선택, 쉼표로 구분)
 uvicorn app.asgi:app --host 127.0.0.1 --port 8000
 ```
 
 `audreaming.com`의 웹서버(nginx 등)에서 HTTPS로 `/api/`를 `127.0.0.1:8000`에 프록시하면 됩니다. 연락 두절 확인은 cron에 `cd /path/to/server && python -m app.overdue`를 하루 한 번 등록하세요 (`PCGUARD_OVERDUE_DAYS`, 기본 8일).
+
+### 학교 밖 접속 감지
+
+`PCGUARD_SCHOOL_NETWORKS`에 학교 인터넷의 공인 IP(또는 대역)를 적어 두면, PC가 그 밖에서 켜져 보고하는 즉시 **high** 알림을 보냅니다. PC를 통째로 가져간 경우 연락 두절(8일)을 기다리지 않고 바로 알 수 있습니다. 학교 공인 IP는 학교 PC에서 `https://ifconfig.me`에 접속하면 보입니다. 비워 두면 이 검사는 하지 않습니다.
+
+- 밖에 있는 동안 보고가 여러 번 와도 알림은 한 번만 보내고, 학교 안에서 다시 보고하면 감시를 재개합니다.
+- 서버가 접속 IP를 정확히 알도록 nginx에서 `proxy_set_header X-Forwarded-For $remote_addr;`로 헤더를 덮어쓰세요. (`$proxy_add_x_forwarded_for`는 클라이언트가 보낸 값을 앞에 남겨 IP를 속일 수 있습니다.)
 
 ### API
 
@@ -81,7 +89,7 @@ uvicorn app.asgi:app --host 127.0.0.1 --port 8000
 
 ## 판정 기준
 
-- 메인보드/BIOS 일련번호 변경, CPU·메모리·저장장치·그래픽카드 제거: **high**
+- 학교 밖 네트워크에서 켜짐, 메인보드/BIOS 일련번호 변경, CPU·메모리·저장장치·그래픽카드 제거: **high**
 - 다른 망(호실)으로 이동, 네트워크카드 제거, 연락 두절: **medium**
 - 새 부품 추가: **info** (기록만 하고 알림은 보내지 않음)
 - 같은 변경이 계속 보고되면 알림은 처음 한 번만 보냅니다. 정상 교체라면 `accept`로 기준을 갱신하세요.

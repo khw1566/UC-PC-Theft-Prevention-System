@@ -10,9 +10,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import db
-from .compare import compare
+from .compare import Finding, compare
 from .config import Settings, load_settings
-from .net import primary_subnet
+from .net import outside_school, primary_subnet
 from .notify import Notifier, public_key_b64
 
 STATIC = Path(__file__).parent / "static"
@@ -96,19 +96,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             findings = compare(json.loads(machine["baseline_json"]), data)
             alerts = [f for f in findings if f.severity != "info"]
             sig = hashlib.sha256("\n".join(f.message for f in findings).encode()).hexdigest() if findings else None
-            notify_now = bool(alerts) and sig != machine["last_alert_sig"]
 
             # 같은 변경이 매주 반복 보고돼도 알림은 처음 한 번만 보냅니다.
-            if notify_now:
-                for f in alerts:
-                    db.add_alert(conn, body.machine_id, f.severity, f.message)
-            db.update_last_report(conn, data, sig, subnet, remote_ip)
+            new_alerts = list(alerts) if sig != machine["last_alert_sig"] else []
 
-        if notify_now:
+            # 학교 밖에서 켜졌다면 PC째 반출된 것일 수 있으므로 바로 알립니다.
+            # 다시 학교 안에서 보고할 때까지는 한 번만 알립니다.
+            offsite = outside_school(remote_ip, settings.school_networks)
+            if offsite:
+                finding = Finding("high", f"학교 밖 네트워크에서 켜짐 (접속 IP {remote_ip})")
+                alerts.append(finding)
+                if not machine["offsite_alerted"]:
+                    new_alerts.append(finding)
+
+            for f in new_alerts:
+                db.add_alert(conn, body.machine_id, f.severity, f.message)
+            db.update_last_report(conn, data, sig, subnet, remote_ip)
+            db.set_offsite_alerted(conn, body.machine_id, offsite)
+
+        if new_alerts:
             room = room_label(subnet)
             notifier.send(
                 f"🚨 {room} {body.hostname} 이상 감지",
-                "\n".join(f.message for f in alerts),
+                "\n".join(f.message for f in new_alerts),
                 f"/#pc={body.machine_id}",
             )
         return {"status": "alert" if alerts else "ok", "alerts": [f.message for f in alerts]}
