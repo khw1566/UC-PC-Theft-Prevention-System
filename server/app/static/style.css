@@ -14,6 +14,8 @@
   --danger-bg: #fdecec;
   --offline: #64748b;
   --offline-bg: #eceff3;
+  --paused: #7c3aed;
+  --paused-bg: #f1ebfd;
   --radius: 14px;
   color-scheme: light;
 }
@@ -34,6 +36,8 @@
     --danger-bg: #3d1515;
     --offline: #94a3b8;
     --offline-bg: #1e2737;
+    --paused: #c4b5fd;
+    --paused-bg: #2a2142;
     color-scheme: dark;
   }
 }
@@ -113,7 +117,7 @@ input {
 }
 
 /* 요약 */
-.summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px; }
+.summary { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 8px; margin-bottom: 16px; }
 .stat {
   border: 1px solid var(--border);
   background: var(--surface);
@@ -130,6 +134,7 @@ input {
 .stat.danger b { color: var(--danger); }
 .stat.warning b { color: var(--warning); }
 .stat.offline b { color: var(--offline); }
+.stat.paused b { color: var(--paused); }
 @media (max-width: 420px) {
   .stat { padding: 8px 10px; }
   .stat b { font-size: 20px; }
@@ -173,6 +178,7 @@ input {
 .sev.high { background: var(--danger); }
 .sev.medium { background: var(--warning); }
 .sev.info { background: var(--muted); }
+.sev.test { background: var(--paused); }
 
 /* 호실 */
 .section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
@@ -195,6 +201,7 @@ input {
 .pill.warning { background: var(--warning-bg); color: var(--warning); }
 .pill.danger { background: var(--danger-bg); color: var(--danger); }
 .pill.offline { background: var(--offline-bg); color: var(--offline); }
+.pill.paused { background: var(--paused-bg); color: var(--paused); }
 
 .pcs { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
 .pc {
@@ -215,6 +222,8 @@ input {
 .pc.danger { border-left-color: var(--danger); background: var(--danger-bg); }
 .pc.offline { border-left-color: var(--offline); background: var(--offline-bg); }
 .pc.offline b { color: var(--muted); }
+.pc.paused { border-left-color: var(--paused); background: var(--paused-bg); }
+.pc span.memo { color: var(--text); }
 .empty { text-align: center; padding: 40px 0; }
 
 /* 상세 */
@@ -254,3 +263,4 @@ th { color: var(--muted); font-weight: 600; border-top: 0; }
 .status-banner.warning { background: var(--warning-bg); color: var(--warning); }
 .status-banner.danger { background: var(--danger-bg); color: var(--danger); }
 .status-banner.offline { background: var(--offline-bg); color: var(--offline); }
+.status-banner.paused { background: var(--paused-bg); color: var(--paused); }

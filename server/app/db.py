@@ -14,7 +14,12 @@ CREATE TABLE IF NOT EXISTS machines (
     overdue_alerted INTEGER NOT NULL DEFAULT 0,
     subnet          TEXT,
     remote_ip       TEXT,
-    offsite_alerted INTEGER NOT NULL DEFAULT 0
+    offsite_alerted INTEGER NOT NULL DEFAULT 0,
+    memo            TEXT,
+    memo_updated_at TEXT,
+    paused_until    TEXT,
+    pause_reason    TEXT,
+    disabled_json   TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS alerts (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,6 +62,11 @@ MACHINE_COLUMNS = {
     "subnet": "TEXT",
     "remote_ip": "TEXT",
     "offsite_alerted": "INTEGER NOT NULL DEFAULT 0",
+    "memo": "TEXT",
+    "memo_updated_at": "TEXT",
+    "paused_until": "TEXT",
+    "pause_reason": "TEXT",
+    "disabled_json": "TEXT NOT NULL DEFAULT '[]'",
 }
 
 
@@ -66,6 +76,10 @@ def _migrate(conn) -> None:
         for name, decl in MACHINE_COLUMNS.items():
             if name not in existing:
                 conn.execute(f"ALTER TABLE machines ADD COLUMN {name} {decl}")
+
+
+def is_paused(machine) -> bool:
+    return bool(machine["paused_until"]) and machine["paused_until"] > now()
 
 
 def get_machine(conn, machine_id: str):
@@ -101,6 +115,22 @@ def accept_baseline(conn, machine_id: str) -> bool:
     )
     if cur.rowcount:
         conn.execute("UPDATE alerts SET acknowledged = 1 WHERE machine_id = ?", (machine_id,))
+    return cur.rowcount > 0
+
+
+def set_memo(conn, machine_id: str, memo: str) -> bool:
+    cur = conn.execute(
+        "UPDATE machines SET memo = ?, memo_updated_at = ? WHERE machine_id = ?",
+        (memo or None, now() if memo else None, machine_id),
+    )
+    return cur.rowcount > 0
+
+
+def set_disabled(conn, machine_id: str, paused_until: str | None, reason: str | None, disabled: list[str]) -> bool:
+    cur = conn.execute(
+        "UPDATE machines SET paused_until = ?, pause_reason = ?, disabled_json = ? WHERE machine_id = ?",
+        (paused_until, reason or None, json.dumps(disabled), machine_id),
+    )
     return cur.rowcount > 0
 
 

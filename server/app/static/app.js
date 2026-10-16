@@ -5,8 +5,10 @@ const STATUS = {
   danger: "이상",
   warning: "주의",
   offline: "연락 두절",
+  paused: "일시중지",
   ok: "정상",
 };
+const FEATURE = { startup_report: "시작 시 보고", weekly_report: "주간 보고" };
 const KIND = { cpu: "CPU", ram: "메모리", disk: "저장장치", gpu: "그래픽카드", nic: "네트워크카드" };
 const $ = (sel) => document.querySelector(sel);
 
@@ -110,7 +112,7 @@ function allMachines() {
 function render() {
   const { rooms, alerts } = state.data;
   const machines = allMachines();
-  const counts = { all: machines.length, danger: 0, warning: 0, offline: 0, ok: 0 };
+  const counts = { all: machines.length, danger: 0, warning: 0, offline: 0, paused: 0, ok: 0 };
   machines.forEach((m) => counts[m.status]++);
 
   const stats = [
@@ -118,6 +120,7 @@ function render() {
     ["danger", "이상", counts.danger],
     ["warning", "주의", counts.warning],
     ["offline", "연락 두절", counts.offline],
+    ...(counts.paused ? [["paused", "일시중지", counts.paused]] : []),
   ];
   $("#summary").replaceChildren(
     ...stats.map(([key, label, n]) =>
@@ -164,7 +167,7 @@ function renderRoom(room) {
           room.subnet ? h("button", { type: "button", class: "btn small ghost", onclick: () => renameRoom(room) }, "✎ 이름") : null)
       ),
       h("div", { class: "room-counts" },
-        ...["danger", "warning", "offline", "ok"]
+        ...["danger", "warning", "offline", "paused", "ok"]
           .filter((s) => tally[s])
           .map((s) => h("span", { class: `pill ${s}` }, `${STATUS[s]} ${tally[s]}`))
       )
@@ -174,7 +177,9 @@ function renderRoom(room) {
           h("button", { type: "button", class: `pc ${m.status}`, onclick: () => openPc(m.machine_id), title: STATUS[m.status] },
             h("b", {}, m.hostname || m.machine_id),
             h("span", {}, m.status === "ok" ? ago(m.last_seen) : STATUS[m.status]),
-            h("span", {}, m.ip || "")
+            h("span", {}, m.ip || ""),
+            m.memo ? h("span", { class: "memo" }, `📝 ${m.memo}`) : null,
+            m.disabled?.length ? h("span", {}, `🔕 ${m.disabled.map((f) => FEATURE[f] || f).join(", ")} 꺼짐`) : null
           )))
       : h("p", { class: "muted" }, "이 호실에서 보고한 PC가 없어요.")
   );
@@ -217,15 +222,21 @@ async function openPc(machineId) {
   const alerts = d.findings.filter((f) => f.severity !== "info");
 
   $("#pc-title").textContent = d.hostname || machineId;
-  $("#pc-body").replaceChildren(
+  // 조건에 맞지 않는 칸(null)은 빼고 넣습니다.
+  $("#pc-body").replaceChildren(...[
     h("div", { class: `status-banner ${status}` },
-      status === "ok" ? "정상: 처음 등록한 구성과 같아요." : `${STATUS[status]}: ${alerts.length ? `기준과 다른 점 ${alerts.length}개` : `${state.data.overdue_days}일 넘게 보고가 없어요`}`),
+      status === "ok" ? "정상: 처음 등록한 구성과 같아요."
+        : status === "paused" ? `일시중지: ${fmtTime(d.paused_until)}까지 이 PC의 알림을 보내지 않아요.`
+        : `${STATUS[status]}: ${alerts.length ? `기준과 다른 점 ${alerts.length}개` : summary?.open_alerts ? `확인할 알림 ${summary.open_alerts}개` : `${state.data.overdue_days}일 넘게 보고가 없어요`}`),
     d.findings.length
       ? h("ul", { class: "findings" }, ...d.findings.map((f) => h("li", {}, h("span", { class: `sev ${f.severity}` }), f.message)))
       : null,
     h("h4", {}, "기본 정보"),
     h("dl", { class: "kv" },
       ...[
+        ["관리자 메모", d.memo && `${d.memo} (${fmtTime(d.memo_updated_at)})`],
+        ["알림 일시중지", d.paused_until && `${fmtTime(d.paused_until)}까지${d.pause_reason ? ` · ${d.pause_reason}` : ""}`],
+        ["꺼진 기능", d.disabled?.length && d.disabled.map((f) => FEATURE[f] || f).join(", ")],
         ["호실", `${d.room}${d.subnet && d.room !== d.subnet ? ` (${d.subnet})` : ""}`],
         ["IP", (r.network || []).map((n) => n.ip).join(", ") || d.remote_ip],
         ["접속 IP", d.remote_ip],
@@ -253,9 +264,18 @@ async function openPc(machineId) {
     h("div", { class: "actions" },
       d.findings.length || summary?.open_alerts
         ? h("button", { type: "button", class: "btn primary", onclick: () => acceptPc(machineId) }, "현재 구성을 정상으로 승인")
+        : null,
+      d.paused_until
+        ? h("button", { type: "button", class: "btn", onclick: () => resumePc(machineId, d.disabled) }, "알림 일시중지 해제")
         : null
     )
-  );
+  ].filter(Boolean));
+}
+
+async function resumePc(machineId, disabled) {
+  await api(`/api/machines/${encodeURIComponent(machineId)}/disable`, { method: "POST", body: JSON.stringify({ hours: 0, disabled }) });
+  openPc(machineId);
+  refresh();
 }
 
 async function acceptPc(machineId) {
