@@ -164,3 +164,81 @@ def test_dashboard_page_served(client):
     assert "PCGuard" in client.get("/").text
     assert client.get("/sw.js").headers["content-type"].startswith("text/javascript")
     assert client.get("/static/app.js").status_code == 200
+
+
+# ---- 클라이언트 관리 메뉴 ----
+
+KEY = {"X-Api-Key": "k"}
+ADMIN = {"X-Admin-Key": "a"}
+
+
+def test_client_status_and_memo(client):
+    assert client.get("/api/client/status", params={"machine_id": "UUID-1"}, headers=KEY).json() == {"registered": False}
+    assert client.post("/api/client/memo", json={"machine_id": "UUID-1", "memo": "x"}, headers=KEY).status_code == 404
+    post(client, BASE)
+    assert client.post("/api/client/memo", json={"machine_id": "UUID-1", "memo": "x"}).status_code == 401
+    client.post("/api/client/memo", json={"machine_id": "UUID-1", "memo": " 3열 5번 자리 "}, headers=KEY)
+
+    s = client.get("/api/client/status", params={"machine_id": "UUID-1"}, headers=KEY).json()
+    assert s["registered"] and s["memo"] == "3열 5번 자리"
+    [m] = client.get("/api/dashboard", headers=ADMIN).json()["rooms"][0]["machines"]
+    assert m["memo"] == "3열 5번 자리"
+    detail = client.get("/api/machines/UUID-1", headers=ADMIN).json()
+    assert detail["memo"] == "3열 5번 자리" and detail["memo_updated_at"]
+
+
+def test_client_test_alert(client, sent):
+    post(client, BASE)
+    r = client.post("/api/client/test-alert", json={"machine_id": "UUID-1", "message": "점검"}, headers=KEY)
+    assert r.status_code == 200
+    assert sent[0][0].startswith("🧪 [테스트]") and "점검" in sent[0][1]
+    # 연속으로 누르면 알림이 쏟아지지 않도록 막음
+    assert client.post("/api/client/test-alert", json={"machine_id": "UUID-1"}, headers=KEY).status_code == 429
+    assert len(sent) == 1
+    d = client.get("/api/dashboard", headers=ADMIN).json()
+    assert d["alerts"][0]["severity"] == "test"
+    assert d["rooms"][0]["machines"][0]["status"] == "warning"
+
+
+def test_disable_needs_admin_key_and_pauses_alerts(client, settings, sent):
+    post(client, BASE)
+    body = {"hours": 2, "reason": "램 교체", "disabled": ["startup_report"]}
+    assert client.post("/api/machines/UUID-1/disable", json=body, headers=KEY).status_code == 401
+    bad = {**body, "disabled": ["everything"]}
+    assert client.post("/api/machines/UUID-1/disable", json=bad, headers=ADMIN).status_code == 422
+    assert client.post("/api/machines/UUID-1/disable", json=body, headers=ADMIN).json()["paused_until"]
+
+    d = client.get("/api/dashboard", headers=ADMIN).json()
+    m = d["rooms"][0]["machines"][0]
+    assert m["status"] == "paused" and m["disabled"] == ["startup_report"]
+
+    # 일시중지 중에는 부품이 빠져도 알리지 않음
+    no_ram = with_components([c for c in BASE["components"] if c["kind"] != "ram"])
+    post(client, no_ram)
+    assert sent == [] and client.get("/api/alerts", headers=ADMIN).json() == []
+
+    # 연락 두절 검사도 건너뜀
+    conn = client.app.state.conn
+    old = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat(timespec="seconds")
+    with conn:
+        conn.execute("UPDATE machines SET last_seen = ?", (old,))
+    assert check_overdue(settings, conn, client.app.state.notifier) == []
+
+    # 해제하면 다음 보고에서 바로 알림
+    client.post("/api/machines/UUID-1/disable", json={"hours": 0, "disabled": []}, headers=ADMIN)
+    assert post(client, no_ram).json()["status"] == "alert"
+    assert len(sent) == 1
+
+
+def test_old_database_is_migrated(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE machines (machine_id TEXT PRIMARY KEY, hostname TEXT, baseline_json TEXT NOT NULL,"
+                " last_report_json TEXT NOT NULL, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,"
+                " last_alert_sig TEXT, overdue_alerted INTEGER NOT NULL DEFAULT 0)")
+    old.commit()
+    old.close()
+    c = TestClient(create_app(Settings(api_key="k", admin_key="a", db_path=str(path))))
+    assert post(c, BASE).json()["status"] == "registered"
+    assert c.post("/api/client/memo", json={"machine_id": "UUID-1", "memo": "m"}, headers=KEY).status_code == 200

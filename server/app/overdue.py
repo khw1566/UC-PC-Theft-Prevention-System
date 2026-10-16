@@ -17,8 +17,9 @@ def check_overdue(settings: Settings, conn=None, notifier: Notifier | None = Non
     rows = conn.execute(
         "SELECT m.machine_id, m.hostname, m.last_seen, COALESCE(r.name, m.subnet, '미분류') AS room"
         " FROM machines m LEFT JOIN rooms r ON r.subnet = m.subnet"
-        " WHERE m.last_seen < ? AND m.overdue_alerted = 0",
-        (cutoff,),
+        " WHERE m.last_seen < ? AND m.overdue_alerted = 0"
+        " AND (m.paused_until IS NULL OR m.paused_until <= ?)",
+        (cutoff, db.now()),
     ).fetchall()
     flagged = []
     with conn:
