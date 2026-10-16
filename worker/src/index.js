@@ -373,6 +373,21 @@ async function asset(request, env, path, headers = {}) {
   return out;
 }
 
+// 안드로이드 앱(android/)이 이 사이트를 주소창 없이 열도록 허용하는 Digital Asset Links.
+// PCGUARD_ANDROID_CERT_SHA256에는 앱 서명 키의 SHA-256 지문을 쉼표로 구분해 적습니다.
+function assetLinks(env) {
+  const fingerprints = (env.PCGUARD_ANDROID_CERT_SHA256 || "").split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
+  if (!fingerprints.length) return [];
+  return [{
+    relation: ["delegate_permission/common.handle_all_urls"],
+    target: {
+      namespace: "android_app",
+      package_name: env.PCGUARD_ANDROID_PACKAGE || "com.audreaming.pcguard",
+      sha256_cert_fingerprints: fingerprints,
+    },
+  }];
+}
+
 // ---- 라우팅 ----
 
 async function route(request, env, ctx) {
@@ -454,6 +469,7 @@ async function route(request, env, ctx) {
     return asset(request, env, path, { "Content-Type": "application/manifest+json" });
   }
   if (path.startsWith("/static/")) return asset(request, env, path.slice("/static".length));
+  if (path === "/.well-known/assetlinks.json") return json(assetLinks(env));
   throw new HttpError(404, "Not Found");
 }
 

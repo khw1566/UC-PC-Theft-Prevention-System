@@ -1,0 +1,60 @@
+plugins {
+    id "com.android.application"
+}
+
+// 웹 대시보드 주소. 다른 도메인에 배포했다면 -PpcguardHost=example.com 으로 바꿔 빌드하세요.
+def pcguardHost = project.findProperty("pcguardHost") ?: "pcguard.audreaming.com"
+
+// 서명 키: android/keystore.properties가 있으면 그 키를, 없으면 이 PC의 안드로이드 디버그 키를 씁니다.
+// 어느 키든 그 SHA-256 지문이 서버의 PCGUARD_ANDROID_CERT_SHA256에 있어야 주소창 없이 열립니다.
+def keystoreFile = rootProject.file("keystore.properties")
+def keystore = new Properties()
+if (keystoreFile.exists()) keystoreFile.withInputStream { keystore.load(it) }
+
+android {
+    namespace "com.audreaming.pcguard"
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "com.audreaming.pcguard"
+        minSdk 23
+        targetSdk 36
+        versionCode 1
+        versionName "1.0.0"
+        manifestPlaceholders = [hostName: pcguardHost]
+        resValue "string", "asset_statements",
+            "[{\\\"relation\\\": [\\\"delegate_permission/common.handle_all_urls\\\"], \\\"target\\\": {\\\"namespace\\\": \\\"web\\\", \\\"site\\\": \\\"https://${pcguardHost}\\\"}}]"
+    }
+
+    signingConfigs {
+        release {
+            if (keystoreFile.exists()) {
+                storeFile rootProject.file(keystore["storeFile"])
+                storePassword keystore["storePassword"]
+                keyAlias keystore["keyAlias"]
+                keyPassword keystore["keyPassword"]
+            } else {
+                storeFile file("${System.getProperty("user.home")}/.android/debug.keystore")
+                storePassword "android"
+                keyAlias "androiddebugkey"
+                keyPassword "android"
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation "com.google.androidbrowserhelper:androidbrowserhelper:2.5.0"
+}
