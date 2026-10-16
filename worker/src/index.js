@@ -1,4 +1,5 @@
 // PCGuard 감시 서버 (Cloudflare Workers + D1). server/app/main.py와 같은 API를 제공합니다.
+import * as auth from "./auth.js";
 import { compare } from "./compare.js";
 import * as db from "./db.js";
 import { outsideSchool, parseSchoolNetworks, primarySubnet } from "./net.js";
@@ -170,6 +171,7 @@ async function report(request, env, ctx) {
 // 클라이언트 메뉴에서 끌 수 있는 기능
 const DISABLE_FEATURES = new Set(["startup_report", "weekly_report"]);
 const TEST_ALERT_INTERVAL_MS = 30 * 1000;
+const IDENTIFY_DEFAULT_SECONDS = 5 * 60;
 
 async function requireMachine(env, machineId) {
   const m = await db.getMachine(env.DB, machineId);
@@ -323,9 +325,46 @@ async function machineDetail(env, machineId) {
     paused_until: db.isPaused(m) ? m.paused_until : null,
     pause_reason: m.pause_reason,
     disabled: JSON.parse(m.disabled_json),
+    identify_until: activeIdentify(m) ? m.identify_until : null,
     report: current,
     findings: compare(JSON.parse(m.baseline_json), current),
     alerts,
+  });
+}
+
+// ---- PC 식별 창 ----
+
+function activeIdentify(m) {
+  return Boolean(m.identify_until) && m.identify_until > db.now();
+}
+
+/** 대시보드에서 누르면 해당 PC 화면에 seconds초 동안 눈에 띄는 식별 창을 띄웁니다 (0이면 끄기). */
+async function identify(request, env, machineId) {
+  const body = object(await readJson(request));
+  const seconds = body.seconds ?? IDENTIFY_DEFAULT_SECONDS;
+  if (typeof seconds !== "number" || !(seconds >= 0 && seconds <= 3600)) throw new HttpError(422, "seconds must be between 0 and 3600");
+  const message = maxLen(optStr(body, "message") ?? "", "message", 200).trim();
+  const until = seconds > 0 ? db.now(new Date(Date.now() + seconds * 1000)) : null;
+  const res = await env.DB.prepare("UPDATE machines SET identify_until = ?, identify_message = ? WHERE machine_id = ?")
+    .bind(until, message || null, machineId).run();
+  if (!res.meta.changes) throw new HttpError(404, "unknown machine");
+  return json({ ok: true, identify_until: until });
+}
+
+/**
+ * PC의 작업표시줄 아이콘이 주기적으로 묻는 식별 요청. 키 없이 열려 있으므로
+ * 식별 창에 띄울 내용(호실, 이름, 메시지)만 돌려주고 부품 정보나 메모는 주지 않습니다.
+ */
+async function identifyPoll(env, machineId) {
+  if (!machineId) throw new HttpError(422, "machine_id is required");
+  const m = await db.getMachine(env.DB, machineId);
+  if (!m || !activeIdentify(m)) return json({ active: false });
+  return json({
+    active: true,
+    until: m.identify_until,
+    hostname: m.hostname,
+    room: await roomLabel(env, m.subnet),
+    message: m.identify_message || "",
   });
 }
 
@@ -394,10 +433,36 @@ async function route(request, env, ctx) {
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
-  const admin = () => checkKey(env.PCGUARD_ADMIN_KEY, request.headers.get("X-Admin-Key"));
+  const admin = async () => {
+    if (!(await auth.isAdmin(env, request.headers.get("X-Admin-Key")))) throw new HttpError(401, "invalid key");
+  };
   let m;
 
   if (method === "POST" && path === "/api/report") return report(request, env, ctx);
+  if (method === "GET" && path === "/api/identify") return identifyPoll(env, url.searchParams.get("machine_id"));
+
+  // 관리자 로그인: 처음 키 또는 대시보드에서 바꾼 비밀번호로 세션 토큰을 받습니다.
+  if (method === "POST" && path === "/api/login") {
+    const body = object(await readJson(request));
+    const res = await auth.login(env, typeof body.password === "string" ? body.password : "");
+    if (res.error === "locked") throw new HttpError(429, "too many failed attempts, try again later");
+    if (res.error) throw new HttpError(401, "invalid password");
+    return json(res);
+  }
+  if (method === "POST" && path === "/api/logout") {
+    await auth.logout(env, request.headers.get("X-Admin-Key"));
+    return json({ ok: true });
+  }
+  if (method === "POST" && path === "/api/admin/password") {
+    await admin();
+    const body = object(await readJson(request));
+    const next = reqStr(body, "new_password");
+    if (next.length < 4 || next.length > 100) throw new HttpError(422, "new_password must be 4 to 100 characters");
+    const current = typeof body.current_password === "string" ? body.current_password : "";
+    const res = await auth.changePassword(env, current, next);
+    if (res.error) throw new HttpError(403, "current password is wrong");
+    return json(res);
+  }
 
   if (path.startsWith("/api/client/")) {
     await checkKey(env.PCGUARD_API_KEY, request.headers.get("X-Api-Key"));
@@ -423,6 +488,10 @@ async function route(request, env, ctx) {
     await admin();
     if (!(await db.acceptBaseline(env.DB, decodeURIComponent(m[1])))) throw new HttpError(404, "unknown machine");
     return json({ ok: true });
+  }
+  if (method === "POST" && (m = path.match(/^\/api\/machines\/([^/]+)\/identify$/))) {
+    await admin();
+    return identify(request, env, decodeURIComponent(m[1]));
   }
   if (method === "POST" && (m = path.match(/^\/api\/machines\/([^/]+)\/disable$/))) {
     await admin();

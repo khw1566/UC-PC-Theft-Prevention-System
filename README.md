@@ -15,6 +15,8 @@
 - 각 PC는 기본 게이트웨이가 있는 네트워크의 서브넷(예: `10.1.3.0/24`)으로 호실이 정해집니다. 호실 카드의 `✎ 이름`을 눌러 `301호 컴퓨터실`처럼 이름을 붙이세요.
 - PC 타일 색: 초록 정상, 주황 주의(호실 이동, 네트워크카드 제거 등), 빨강 이상(부품 제거, 메인보드 교체), 회색 연락 두절.
 - PC를 누르면 부품 목록, 기준과 다른 점, 알림 기록이 나오고, 정상적인 교체였다면 `현재 구성을 정상으로 승인`으로 기준을 갱신합니다.
+- 상단 `비밀번호 변경`에서 짧은 관리자 비밀번호로 바꿀 수 있습니다. 대시보드, 휴대폰 앱, PC 관리 메뉴가 같은 비밀번호를 쓰고, 잊었을 때는 처음 넣은 `PCGUARD_ADMIN_KEY`로 들어와 다시 바꿉니다.
+- PC 상세의 `이 PC 화면에 식별 창 띄우기`를 누르면 1분 안에 그 PC 화면에 깜빡이는 빨간 전체 화면 창이 5분 동안 떠서 어느 자리인지 바로 찾을 수 있습니다. PC에 로그인한 사용자가 있어야 보입니다.
 - 화면은 30초마다, 그리고 앱으로 돌아올 때마다 새로 고칩니다.
 
 ### 휴대폰 알림 받기
@@ -124,6 +126,11 @@ uvicorn app.asgi:app --host 127.0.0.1 --port 8000
 | POST | `/api/client/memo` | `X-Api-Key` | `{"machine_id", "memo"}` 관리자 메모 저장 (최대 500자, 빈 값이면 삭제) |
 | POST | `/api/client/test-alert` | `X-Api-Key` | `{"machine_id", "message"}` 심각도 `test`인 알림 기록 + 푸시. 같은 PC는 30초에 한 번 |
 | POST | `/api/machines/{id}/disable` | `X-Admin-Key` | `{"hours", "reason", "disabled"}` 서버 알림을 `hours`시간 일시중지(0이면 해제)하고 PC에서 끈 기능(`startup_report`, `weekly_report`)을 기록 |
+| POST | `/api/machines/{id}/identify` | `X-Admin-Key` | `{"seconds", "message"}` 해당 PC 화면에 식별 창을 `seconds`초(기본 300, 0이면 끄기) 동안 띄움 |
+| GET | `/api/identify?machine_id=` | 없음 | PC 작업표시줄 아이콘이 1분마다 확인하는 식별 요청 (호실, 이름, 메시지만 반환) |
+| POST | `/api/login` | 없음 | `{"password"}` 관리자 비밀번호 또는 처음 키로 로그인해 세션 토큰을 받음. 이 토큰을 `X-Admin-Key`로 씀. 10번 틀리면 10분 잠금(처음 키는 예외) |
+| POST | `/api/logout` | `X-Admin-Key` | 세션 토큰 폐기 |
+| POST | `/api/admin/password` | `X-Admin-Key` | `{"current_password", "new_password"}` 관리자 비밀번호 변경 (4자 이상). 다른 기기 로그인은 풀림 |
 
 ## 학교 PC에 설치
 

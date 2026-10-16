@@ -1,5 +1,5 @@
 // 테스트용: node:sqlite로 D1 API를 흉내 내고, Worker를 직접 호출합니다.
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
 import worker from "../src/index.js";
@@ -33,7 +33,10 @@ class Statement {
 export class FakeD1 {
   constructor() {
     this.db = new DatabaseSync(":memory:");
-    this.db.exec(readFileSync(new URL("../migrations/0001_init.sql", import.meta.url), "utf8"));
+    const dir = new URL("../migrations/", import.meta.url);
+    for (const name of readdirSync(dir).filter((n) => n.endsWith(".sql")).sort()) {
+      this.db.exec(readFileSync(new URL(name, dir), "utf8"));
+    }
   }
 
   prepare(sql) {

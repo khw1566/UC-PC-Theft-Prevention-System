@@ -18,9 +18,9 @@
       <img src="/static/icon.svg" alt="" width="56" height="56">
       <h1>PCGuard</h1>
       <p>학교 PC 도난 감시 대시보드</p>
-      <input id="login-key" type="password" placeholder="관리자 키" autocomplete="current-password" required>
+      <input id="login-key" type="password" placeholder="관리자 비밀번호" autocomplete="current-password" required>
       <button type="submit" class="btn primary">들어가기</button>
-      <p id="login-error" class="error" hidden>키가 맞지 않아요.</p>
+      <p id="login-error" class="error" hidden>비밀번호가 맞지 않아요.</p>
     </form>
   </section>
 
@@ -29,6 +29,7 @@
       <div class="brand"><img src="/static/icon.svg" alt="" width="28" height="28"><span>PCGuard</span></div>
       <div class="top-actions">
         <button id="push-btn" class="btn small" type="button">🔔 알림 켜기</button>
+        <button id="password-btn" class="btn small ghost" type="button">비밀번호 변경</button>
         <button id="logout-btn" class="btn small ghost" type="button">로그아웃</button>
       </div>
     </header>
@@ -57,6 +58,21 @@
       <button class="btn small ghost" type="button" data-close aria-label="닫기">✕</button>
     </div>
     <div id="pc-body"></div>
+  </dialog>
+
+  <dialog id="password-dialog">
+    <div class="dialog-head">
+      <h3>관리자 비밀번호 변경</h3>
+      <button class="btn small ghost" type="button" data-close aria-label="닫기">✕</button>
+    </div>
+    <form id="password-form" class="password-form">
+      <p class="muted">대시보드, 휴대폰 앱, PC 관리 메뉴에서 같은 비밀번호를 써요. 잊었을 때는 처음 받은 관리자 키로 들어와 다시 바꿀 수 있어요.</p>
+      <input id="pw-current" type="password" placeholder="현재 비밀번호 (또는 처음 받은 관리자 키)" autocomplete="current-password" required>
+      <input id="pw-new" type="password" placeholder="새 비밀번호 (4자 이상)" autocomplete="new-password" minlength="4" maxlength="100" required>
+      <input id="pw-confirm" type="password" placeholder="새 비밀번호 확인" autocomplete="new-password" required>
+      <button type="submit" class="btn primary">바꾸기</button>
+      <p id="password-msg" class="error" hidden></p>
+    </form>
   </dialog>
 
   <script src="/static/app.js"></script>

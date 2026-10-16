@@ -79,20 +79,78 @@ function logout() {
   showLogin();
 }
 
+// 비밀번호(또는 처음 받은 관리자 키)로 로그인해 세션 토큰을 받아 둡니다.
 $("#login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  adminKey = $("#login-key").value.trim();
-  try {
-    await api("/api/dashboard");
-    storage("set", adminKey);
-    $("#login-error").hidden = true;
-    start();
-  } catch (_) {
-    $("#login-error").hidden = false;
-    $("#login").hidden = false;
+  const res = await fetch("/api/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password: $("#login-key").value }),
+  });
+  // Python 서버에는 /api/login이 없으므로 입력값을 관리자 키로 그대로 씁니다.
+  if (res.status === 404) {
+    adminKey = $("#login-key").value.trim();
+    try {
+      await api("/api/dashboard");
+      storage("set", adminKey);
+      $("#login-error").hidden = true;
+      return start();
+    } catch (_) {
+      $("#login").hidden = false;
+    }
   }
+  if (!res.ok) {
+    $("#login-error").textContent = res.status === 429
+      ? "여러 번 틀려서 잠시 잠겼어요. 10분 뒤에 다시 해 주세요."
+      : "비밀번호가 맞지 않아요.";
+    $("#login-error").hidden = false;
+    return;
+  }
+  adminKey = (await res.json()).token;
+  storage("set", adminKey);
+  $("#login-key").value = "";
+  $("#login-error").hidden = true;
+  start();
 });
-$("#logout-btn").addEventListener("click", logout);
+$("#logout-btn").addEventListener("click", () => {
+  fetch("/api/logout", { method: "POST", headers: { "X-Admin-Key": adminKey || "" } }).catch(() => {});
+  logout();
+});
+
+$("#password-btn").addEventListener("click", () => {
+  $("#password-form").reset();
+  $("#password-msg").hidden = true;
+  $("#password-dialog").showModal();
+});
+$("#password-dialog").addEventListener("click", (e) => {
+  if (e.target === e.currentTarget || e.target.closest("[data-close]")) $("#password-dialog").close();
+});
+$("#password-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = $("#password-msg");
+  const next = $("#pw-new").value;
+  msg.hidden = false;
+  msg.className = "error";
+  if (next !== $("#pw-confirm").value) {
+    msg.textContent = "새 비밀번호 두 칸이 서로 달라요.";
+    return;
+  }
+  const res = await fetch("/api/admin/password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Admin-Key": adminKey || "" },
+    body: JSON.stringify({ current_password: $("#pw-current").value, new_password: next }),
+  });
+  if (res.status === 401) return logout();
+  if (!res.ok) {
+    msg.textContent = res.status === 403 ? "현재 비밀번호가 맞지 않아요." : "새 비밀번호는 4자 이상 100자 이하로 정해 주세요.";
+    return;
+  }
+  adminKey = (await res.json()).token;
+  storage("set", adminKey);
+  msg.className = "muted";
+  msg.textContent = "바꿨어요. 다른 기기와 PC 관리 메뉴에서는 새 비밀번호로 다시 로그인하세요.";
+  $("#password-form").reset();
+});
 
 // ---- 대시보드 ----
 
@@ -262,6 +320,11 @@ async function openPc(machineId) {
           h("li", {}, h("span", { class: `sev ${a.severity}` }), `${fmtTime(a.created_at)} ${a.message}`, a.acknowledged ? h("span", { class: "muted" }, " (확인됨)") : null)))
       : null,
     h("div", { class: "actions" },
+      h("button", { type: "button", class: "btn", onclick: (e) => identifyPc(machineId, 300, e.currentTarget) },
+        d.identify_until ? `PC 화면 표시 중 (${fmtTime(d.identify_until)}까지) · 다시 보내기` : "이 PC 화면에 식별 창 띄우기 (5분)"),
+      d.identify_until
+        ? h("button", { type: "button", class: "btn", onclick: (e) => identifyPc(machineId, 0, e.currentTarget) }, "식별 창 끄기")
+        : null,
       d.findings.length || summary?.open_alerts
         ? h("button", { type: "button", class: "btn primary", onclick: () => acceptPc(machineId) }, "현재 구성을 정상으로 승인")
         : null,
@@ -270,6 +333,18 @@ async function openPc(machineId) {
         : null
     )
   ].filter(Boolean));
+}
+
+// PC의 작업표시줄 아이콘이 1분마다 확인하므로 창은 최대 1분 안에 뜹니다.
+async function identifyPc(machineId, seconds, btn) {
+  btn.disabled = true;
+  try {
+    await api(`/api/machines/${encodeURIComponent(machineId)}/identify`, { method: "POST", body: JSON.stringify({ seconds }) });
+    if (seconds) alert("보냈어요. 1분 안에 그 PC 화면에 빨간 식별 창이 떠요.");
+  } catch (_) {
+    alert("보내지 못했어요. 잠시 뒤 다시 해 주세요.");
+  }
+  openPc(machineId);
 }
 
 async function resumePc(machineId, disabled) {

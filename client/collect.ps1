@@ -31,8 +31,11 @@ function Write-Log([string]$Message) {
 }
 
 # 작업표시줄 아이콘(tray.ps1)이 읽는 마지막 보고 상태. 관리자 키나 API 키는 넣지 않습니다.
+# machine_id와 server_url은 아이콘이 서버에 식별 창 요청을 물어볼 때 씁니다.
 function Write-State([bool]$Ok, [string]$Detail) {
     $state = [ordered]@{
+        machine_id = $report.machine_id
+        server_url = $config.server_url
         checked_at = (Get-Date).ToString('o')
         ok         = $Ok
         detail     = $Detail

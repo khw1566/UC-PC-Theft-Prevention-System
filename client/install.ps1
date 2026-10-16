@@ -20,6 +20,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $TaskName = 'PCGuard Hardware Check'
+$TrayTaskName = 'PCGuard Tray'
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -37,7 +38,7 @@ if (-not $ServerUrl -or -not $ApiKey) {
 }
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-'collect.ps1', 'menu.ps1', 'tray.ps1', 'uninstall.ps1' | ForEach-Object { Copy-Item (Join-Path $PSScriptRoot $_) $InstallDir -Force }
+'collect.ps1', 'menu.ps1', 'tray.ps1', 'uninstall.ps1', 'pcguard.png' | ForEach-Object { Copy-Item (Join-Path $PSScriptRoot $_) $InstallDir -Force }
 
 [ordered]@{ server_url = $ServerUrl; api_key = $ApiKey } |
     ConvertTo-Json | Set-Content -Path (Join-Path $InstallDir 'config.json') -Encoding UTF8
@@ -45,8 +46,8 @@ New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 # 학생 계정이 키를 읽거나 스크립트를 바꾸지 못하도록 관리자/SYSTEM만 접근하게 합니다.
 # 언어별 계정 이름 차이를 피하려고 SID를 씁니다 (S-1-5-18 SYSTEM, S-1-5-32-544 Administrators).
 icacls $InstallDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
-# 작업표시줄 아이콘은 로그인한 사용자 권한으로 돌기 때문에 tray.ps1만 읽을 수 있게 합니다 (S-1-5-32-545 Users).
-icacls (Join-Path $InstallDir 'tray.ps1') /grant '*S-1-5-32-545:RX' | Out-Null
+# 작업표시줄 아이콘은 로그인한 사용자 권한으로 돌기 때문에 tray.ps1과 아이콘만 읽을 수 있게 합니다 (S-1-5-32-545 Users).
+'tray.ps1', 'pcguard.png' | ForEach-Object { icacls (Join-Path $InstallDir $_) /grant '*S-1-5-32-545:RX' | Out-Null }
 New-Item -ItemType Directory -Force -Path (Join-Path $env:ProgramData 'PCGuard') | Out-Null
 
 $script = Join-Path $InstallDir 'collect.ps1'
@@ -81,13 +82,15 @@ function New-AdminShortcut([string]$Name, [string]$Arguments, [string]$Icon) {
 New-AdminShortcut 'PCGuard 관리 메뉴' "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$(Join-Path $InstallDir 'menu.ps1')`"" 'imageres.dll,-1028'
 New-AdminShortcut 'PCGuard 제거' "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $InstallDir 'uninstall.ps1')`"" 'imageres.dll,-5305'
 
-# 작업표시줄 알림 영역 아이콘: 모든 사용자가 로그인할 때 시작합니다.
-$trayLnk = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\StartUp\PCGuard.lnk'
-$lnk = (New-Object -ComObject WScript.Shell).CreateShortcut($trayLnk)
-$lnk.TargetPath = 'powershell.exe'
-$lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$(Join-Path $InstallDir 'tray.ps1')`""
-$lnk.IconLocation = 'imageres.dll,-1028'
-$lnk.Save()
+# 작업표시줄 알림 영역 아이콘: 모든 사용자(Users 그룹)가 로그인할 때 그 사용자 권한으로 시작합니다.
+# 시작프로그램 바로가기 대신 작업 스케줄러를 써서 설치 직후에도 현재 사용자 화면에 바로 띄울 수 있게 합니다.
+Remove-Item -Force (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\StartUp\PCGuard.lnk') -ErrorAction SilentlyContinue
+$trayAction = New-ScheduledTaskAction -Execute 'powershell.exe' `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$(Join-Path $InstallDir 'tray.ps1')`""
+$traySettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName $TrayTaskName -Action $trayAction -Trigger (New-ScheduledTaskTrigger -AtLogOn) `
+    -Settings $traySettings -Principal (New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited) -Force | Out-Null
 
 Write-Host "설치 완료: $InstallDir"
 Write-Host "시작 메뉴에 'PCGuard 관리 메뉴'를 만들었어요 (테스트 알림, 메모, 기능 끄기)."
@@ -105,5 +108,9 @@ if (Test-Path $stateFile) {
     Write-Warning "1분 안에 보고 결과가 없어요. $(Join-Path $env:ProgramData 'PCGuard\pcguard.log')를 확인하세요."
 }
 
-# 관리자 권한이 아닌 현재 사용자로 아이콘을 띄우려고 탐색기를 통해 바로가기를 엽니다.
-Start-Process explorer.exe "`"$trayLnk`""
+# 이미 떠 있는 예전 아이콘을 닫고, 로그인한 사용자 화면에 새 아이콘을 띄웁니다.
+Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" |
+    Where-Object { $_.CommandLine -like '*PCGuard\tray.ps1*' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-ScheduledTask -TaskName $TrayTaskName
+Write-Host '작업표시줄 알림 영역에 PCGuard 아이콘을 띄웠어요. 안 보이면 오른쪽 ^ 안을 확인하세요.'

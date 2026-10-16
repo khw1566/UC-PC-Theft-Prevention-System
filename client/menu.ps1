@@ -5,7 +5,7 @@
 .DESCRIPTION
     설치 폴더(C:\Program Files\PCGuard)의 config.json은 관리자만 읽을 수 있으므로
     관리자 권한으로 다시 실행합니다. 시작 메뉴의 'PCGuard 관리 메뉴'로 여세요.
-    기능 비활성화는 서버가 관리자 키를 확인한 뒤에만 적용됩니다.
+    열 때 관리자 비밀번호(대시보드와 같음)를 서버에서 확인하고, 기능 비활성화도 그 로그인으로 적용합니다.
 #>
 [CmdletBinding()]
 param([string]$ConfigPath)
@@ -84,6 +84,50 @@ function Get-ApiErrorText($ErrorRecord) {
         default { "서버 오류 ($code): $($ErrorRecord.Exception.Message)" }
     }
 }
+
+# ---- 관리자 로그인 ----
+
+# 메뉴를 열 때 대시보드와 같은 관리자 비밀번호를 서버에 확인합니다. 서버에 연결되지 않으면 열지 않습니다.
+function Request-AdminLogin {
+    $dlg = New-Object Windows.Forms.Form -Property @{
+        Text = 'PCGuard 관리 메뉴 로그인'; ClientSize = New-Object Drawing.Size(360, 150)
+        FormBorderStyle = 'FixedDialog'; MaximizeBox = $false; MinimizeBox = $false; StartPosition = 'CenterScreen'
+        Font = New-Object Drawing.Font('Malgun Gothic', 9); TopMost = $true
+    }
+    $lbl = New-Object Windows.Forms.Label -Property @{ Text = '관리자 비밀번호 (대시보드와 같음)'; Location = '12,14'; Size = '336,20' }
+    $box = New-Object Windows.Forms.TextBox -Property @{ Location = '12,38'; Size = '336,24'; UseSystemPasswordChar = $true }
+    $msg = New-Object Windows.Forms.Label -Property @{ Location = '12,68'; Size = '336,36'; ForeColor = [Drawing.Color]::Firebrick }
+    $ok = New-Object Windows.Forms.Button -Property @{ Text = '확인'; Location = '188,108'; Size = '76,30' }
+    $cancel = New-Object Windows.Forms.Button -Property @{ Text = '취소'; Location = '272,108'; Size = '76,30'; DialogResult = 'Cancel' }
+    $dlg.Controls.AddRange(@($lbl, $box, $msg, $ok, $cancel))
+    $dlg.AcceptButton = $ok
+    $dlg.CancelButton = $cancel
+    $script:AdminToken = $null
+    $ok.Add_Click({
+        $msg.Text = '확인 중...'
+        $dlg.Refresh()
+        try {
+            $script:AdminToken = (Invoke-Api POST '/api/login' @{ password = $box.Text }).token
+            $dlg.DialogResult = 'OK'
+        } catch {
+            $code = 0
+            try { $code = [int]$_.Exception.Response.StatusCode } catch { }
+            $msg.Text = switch ($code) {
+                401     { '비밀번호가 맞지 않아요.' }
+                429     { '여러 번 틀려서 잠시 잠겼어요. 10분 뒤에 다시 해 주세요.' }
+                default { "서버에 연결하지 못했어요. ($($_.Exception.Message))" }
+            }
+            $box.SelectAll()
+            $box.Focus()
+        }
+    })
+    $result = $dlg.ShowDialog()
+    $dlg.Dispose()
+    return ($result -eq 'OK' -and $script:AdminToken)
+}
+
+if (-not (Request-AdminLogin)) { return }
+Write-Log 'admin login ok'
 
 function Get-ServerStatus {
     Invoke-Api GET ('/api/client/status?machine_id=' + [uri]::EscapeDataString($MachineId))
@@ -297,7 +341,7 @@ $btnMemoSave.Add_Click({
 
 $tabOff = New-Tab '비활성화'
 $tabOff.Controls.Add((New-Control Label @(8, 12, 520, 40) @{
-    Text = '수리·점검처럼 잠시 감시를 멈춰야 할 때 필요한 기능만 꺼요. 관리자 키가 맞아야 적용되고, 서버에도 기록돼요.'
+    Text = '수리·점검처럼 잠시 감시를 멈춰야 할 때 필요한 기능만 꺼요. 로그인한 관리자 권한으로 적용되고, 서버에도 기록돼요.'
 }))
 $grp = New-Control GroupBox @(8, 56, 520, 186) @{ Text = '끌 기능' }
 $chkStartup = New-Control CheckBox @(16, 24, 480, 24) @{ Text = '시작 시 보고 끄기 (부팅할 때 하드웨어 정보를 보내지 않음)' }
@@ -310,15 +354,11 @@ $lblPause   = New-Control Label @(36, 112, 470, 64) @{
 }
 $grp.Controls.AddRange(@($chkStartup, $chkWeekly, $chkPause, $numHours, $lblPause))
 $tabOff.Controls.Add($grp)
-$tabOff.Controls.AddRange(@(
-    (New-Control Label @(8, 254, 60, 22) @{ Text = '사유' }),
-    (New-Control Label @(8, 286, 60, 22) @{ Text = '관리자 키' })
-))
+$tabOff.Controls.Add((New-Control Label @(8, 254, 60, 22) @{ Text = '사유' }))
 $reasonBox = New-Control TextBox @(72, 250, 456, 24) @{ MaxLength = 200 }
-$keyBox    = New-Control TextBox @(72, 282, 456, 24) @{ UseSystemPasswordChar = $true }
-$btnApply  = New-Control Button @(8, 318, 140, 34) @{ Text = '적용' }
-$offResult = New-Control Label @(156, 318, 372, 60)
-$tabOff.Controls.AddRange(@($reasonBox, $keyBox, $btnApply, $offResult))
+$btnApply  = New-Control Button @(8, 290, 140, 34) @{ Text = '적용' }
+$offResult = New-Control Label @(156, 290, 372, 60)
+$tabOff.Controls.AddRange(@($reasonBox, $btnApply, $offResult))
 
 function Read-DisableState {
     $t = Get-TriggerState
@@ -335,8 +375,6 @@ function Read-DisableState {
 
 $btnApply.Add_Click({
     Invoke-Safely {
-        $key = $keyBox.Text.Trim()
-        if (-not $key) { $offResult.Text = '관리자 키를 입력하세요.'; return }
         $disabled = @()
         if ($chkStartup.Checked) { $disabled += 'startup_report' }
         if ($chkWeekly.Checked) { $disabled += 'weekly_report' }
@@ -349,16 +387,15 @@ $btnApply.Add_Click({
             if ($answer -ne 'Yes') { return }
         }
 
-        # 서버가 관리자 키를 확인해야만 이 PC의 설정도 바꿉니다.
+        # 서버가 관리자 로그인을 확인해야만 이 PC의 설정도 바꿉니다.
         try {
             Invoke-Api POST "/api/machines/$([uri]::EscapeDataString($MachineId))/disable" `
-                @{ hours = $hours; reason = $reasonBox.Text.Trim(); disabled = $disabled } $key | Out-Null
+                @{ hours = $hours; reason = $reasonBox.Text.Trim(); disabled = $disabled } $script:AdminToken | Out-Null
         } catch {
             $offResult.Text = "적용하지 않았어요. $(Get-ApiErrorText $_)"
             return
         }
         Set-TriggerState -Startup (-not $chkStartup.Checked) -Weekly (-not $chkWeekly.Checked)
-        $keyBox.Clear()
 
         $off = @($disabled | ForEach-Object { $Features[$_] })
         if ($hours -gt 0) { $off += "서버 알림 ${hours}시간" }
@@ -377,4 +414,6 @@ $form.Add_Shown({
         if ($script:ServerStatus) { $memoBox.Text = $script:ServerStatus.memo }
     }
 })
+# 메뉴를 닫으면 이번 로그인 세션을 서버에서 지웁니다.
+$form.Add_FormClosed({ try { Invoke-Api POST '/api/logout' $null $script:AdminToken | Out-Null } catch { } })
 [Windows.Forms.Application]::Run($form)
