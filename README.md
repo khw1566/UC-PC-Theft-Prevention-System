@@ -30,18 +30,18 @@
 
 `android/`는 웹 대시보드를 앱으로 여는 안드로이드 프로젝트입니다. Trusted Web Activity라서 휴대폰의 Chrome 엔진으로 대시보드를 주소창 없이 띄우고, 호실별 PC 그리드, 상태 필터, PC 상세와 변경점, 기준 승인, 메모·일시중지 표시, 웹 푸시 알림까지 웹과 똑같이 동작합니다. 알림은 `PCGuard` 앱 이름과 아이콘으로 표시됩니다. 따로 FCM 설정이 필요 없고, 대시보드를 고치면 앱도 바로 바뀝니다.
 
-Android Studio에서 `android/` 폴더를 열어 빌드하거나, Gradle 8.11 이상으로 빌드합니다.
+Android Studio에서 `android/` 폴더를 열어 빌드하거나 아래처럼 빌드합니다. JDK 17~21이 필요합니다.
 
 ```bash
 cd android
-gradle assembleRelease          # app/build/outputs/apk/release/app-release.apk
+./gradlew assembleRelease        # app/build/outputs/apk/release/app-release.apk
 adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
 - 앱을 연 뒤 `🔔 알림 켜기`를 누르면 이 앱으로 알림을 받습니다. 휴대폰에 Chrome이 있어야 합니다.
 - 주소창 없이 열리려면 서버의 `/.well-known/assetlinks.json`이 앱 서명 키 지문을 알려 줘야 합니다. `wrangler.toml`의 `PCGUARD_ANDROID_CERT_SHA256`에 지문을 적고 배포하세요. 지문이 맞지 않으면 앱은 주소창이 보이는 Chrome 탭으로 열리고 기능은 그대로 됩니다.
 - 서명 키는 `android/keystore.properties`(`storeFile`, `storePassword`, `keyAlias`, `keyPassword`)가 있으면 그 키를, 없으면 빌드한 PC의 안드로이드 디버그 키를 씁니다. 지문은 `keytool -list -v -keystore <키 파일>`의 `SHA256` 줄입니다.
-- 다른 주소에 배포했다면 `gradle assembleRelease -PpcguardHost=example.com`으로 빌드하세요.
+- 다른 주소에 배포했다면 `./gradlew assembleRelease -PpcguardHost=example.com`으로 빌드하세요.
 
 ## 구성
 
