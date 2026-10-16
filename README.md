@@ -32,6 +32,7 @@
 |---|---|
 | `client/collect.ps1` | 하드웨어 수집 및 전송. 실패하면 `C:\ProgramData\PCGuard\queue`에 쌓았다가 다음 실행 때 재전송 |
 | `client/install.ps1` | `C:\Program Files\PCGuard`에 설치하고 작업 스케줄러에 등록 (부팅 2분 후 + 매주) |
+| `client/menu.ps1` | PC에서 여는 관리 메뉴 GUI (상태·디버깅, 테스트 도난 알림, 관리자 메모, 기능 비활성화) |
 | `client/uninstall.ps1` | 작업과 파일 제거 |
 | `server/app/` | 보고 수신, 기준 비교, 알림, 대시보드 API |
 | `server/app/static/` | 웹 대시보드 (설치형 웹앱, 서비스 워커로 푸시 수신) |
@@ -67,6 +68,10 @@ uvicorn app.asgi:app --host 127.0.0.1 --port 8000
 | GET | `/api/alerts` | `X-Admin-Key` | 확인 안 한 알림 (`?include_acknowledged=true`로 전체) |
 | POST | `/api/alerts/{id}/ack` | `X-Admin-Key` | 알림 확인 처리 |
 | POST | `/api/machines/{id}/accept` | `X-Admin-Key` | 현재 구성을 새 기준으로 승인하고 그 PC의 알림을 확인 처리 |
+| GET | `/api/client/status?machine_id=` | `X-Api-Key` | 관리 메뉴용: 등록 여부, 호실, 메모, 일시중지, 꺼진 기능 |
+| POST | `/api/client/memo` | `X-Api-Key` | `{"machine_id", "memo"}` 관리자 메모 저장 (최대 500자, 빈 값이면 삭제) |
+| POST | `/api/client/test-alert` | `X-Api-Key` | `{"machine_id", "message"}` 심각도 `test`인 알림 기록 + 푸시. 같은 PC는 30초에 한 번 |
+| POST | `/api/machines/{id}/disable` | `X-Admin-Key` | `{"hours", "reason", "disabled"}` 서버 알림을 `hours`시간 일시중지(0이면 해제)하고 PC에서 끈 기능(`startup_report`, `weekly_report`)을 기록 |
 
 ## 학교 PC에 설치
 
@@ -77,6 +82,15 @@ uvicorn app.asgi:app --host 127.0.0.1 --port 8000
 # 요일/시간 변경: -WeeklyDay Friday -WeeklyTime 16:00
 ```
 
+### PC의 관리 메뉴 (GUI)
+
+설치하면 시작 메뉴에 **PCGuard 관리 메뉴**가 생깁니다. 관리자 권한으로만 열리므로 학생 계정은 UAC에서 막힙니다.
+
+- **상태·디버깅**: PC 식별자, 예약 작업 상태(마지막/다음 실행), 못 보낸 보고 수, 서버 연결과 등록 상태를 보여 줍니다. `지금 보고 보내기`, `수집 정보 보기`(서버로 보내는 JSON), `로그 보기`.
+- **테스트 알림**: `[테스트]` 도난 알림을 보내 휴대폰 푸시와 대시보드 표시를 확인합니다. 기준 구성은 바뀌지 않고, 대시보드에서 `확인`을 누르면 사라집니다.
+- **관리자 메모**: `3열 5번 자리, 교사용`처럼 PC를 알아볼 메모를 서버에 저장합니다. 대시보드의 PC 타일과 상세 화면에 보입니다.
+- **비활성화**: 시작 시 보고, 주간 보고, 서버 도난 알림(1~720시간 일시중지)을 골라서 끕니다. **관리자 키**(`PCGUARD_ADMIN_KEY`)를 서버가 확인해야만 적용됩니다. 일시중지 중엔 부품 변경 알림과 연락 두절 알림을 보내지 않고, 기간이 끝난 뒤 첫 보고에서 달라진 점이 있으면 알립니다. 대시보드에서는 보라색 `일시중지`로 표시되고 상세 화면에서 바로 해제할 수 있습니다.
+
 전송하지 않고 수집 결과만 보려면 `.\client\collect.ps1 -ConfigPath .\client\config.example.json -DryRun`을 실행하세요. 로그는 `C:\ProgramData\PCGuard\pcguard.log`에 남습니다.
 
 ## 판정 기준
@@ -84,6 +98,7 @@ uvicorn app.asgi:app --host 127.0.0.1 --port 8000
 - 메인보드/BIOS 일련번호 변경, CPU·메모리·저장장치·그래픽카드 제거: **high**
 - 다른 망(호실)으로 이동, 네트워크카드 제거, 연락 두절: **medium**
 - 새 부품 추가: **info** (기록만 하고 알림은 보내지 않음)
+- 관리 메뉴의 테스트 알림: **test** (확인 전까지 PC가 주의로 표시)
 - 같은 변경이 계속 보고되면 알림은 처음 한 번만 보냅니다. 정상 교체라면 `accept`로 기준을 갱신하세요.
 
 ## 테스트
