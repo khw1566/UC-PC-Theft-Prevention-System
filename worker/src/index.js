@@ -73,6 +73,11 @@ function list(value) {
   return Array.isArray(value) ? value : [value];
 }
 
+function maxLen(value, field, n) {
+  if (value.length > n) throw new HttpError(422, `${field} must be at most ${n} characters`);
+  return value;
+}
+
 function object(v) {
   if (!v || typeof v !== "object" || Array.isArray(v)) throw new HttpError(422, "expected an object");
   return v;
@@ -124,7 +129,11 @@ async function report(request, env, ctx) {
 
   const findings = compare(JSON.parse(machine.baseline_json), data);
   const alerts = findings.filter((f) => f.severity !== "info");
-  const sig = findings.length ? await sha256Hex(findings.map((f) => f.message).join("\n")) : null;
+  let sig = findings.length ? await sha256Hex(findings.map((f) => f.message).join("\n")) : null;
+
+  // 점검(일시중지) 중에는 알리지 않고, 서명도 그대로 둬서 끝난 뒤 첫 보고에서 알립니다.
+  const paused = db.isPaused(machine);
+  if (paused) sig = machine.last_alert_sig;
 
   // 같은 변경이 매주 반복 보고돼도 알림은 처음 한 번만 보냅니다.
   const newAlerts = sig !== machine.last_alert_sig ? [...alerts] : [];
@@ -135,12 +144,13 @@ async function report(request, env, ctx) {
   if (offsite) {
     const finding = { severity: "high", message: `학교 밖 네트워크에서 켜짐 (접속 IP ${remoteIp})` };
     alerts.push(finding);
-    if (!machine.offsite_alerted) newAlerts.push(finding);
+    if (!machine.offsite_alerted && !paused) newAlerts.push(finding);
   }
 
   await env.DB.batch([
     ...newAlerts.map((f) => db.addAlert(env.DB, data.machine_id, f.severity, f.message)),
-    db.updateLastReport(env.DB, data, sig, subnet, remoteIp, offsite),
+    // 일시중지 중에 밖에 있었다면 끝난 뒤 첫 보고에서 알리도록 표시하지 않습니다.
+    db.updateLastReport(env.DB, data, sig, subnet, remoteIp, offsite && (!paused || Boolean(machine.offsite_alerted))),
   ]);
 
   if (newAlerts.length) {
@@ -155,8 +165,79 @@ async function report(request, env, ctx) {
   return json({ status: alerts.length ? "alert" : "ok", alerts: alerts.map((f) => f.message) });
 }
 
+// ---- 클라이언트 메뉴 (PC의 관리 메뉴 GUI) ----
+
+// 클라이언트 메뉴에서 끌 수 있는 기능
+const DISABLE_FEATURES = new Set(["startup_report", "weekly_report"]);
+const TEST_ALERT_INTERVAL_MS = 30 * 1000;
+
+async function requireMachine(env, machineId) {
+  const m = await db.getMachine(env.DB, machineId);
+  if (!m) throw new HttpError(404, "unknown machine");
+  return m;
+}
+
+async function clientStatus(env, machineId) {
+  if (!machineId) throw new HttpError(422, "machine_id is required");
+  const m = await db.getMachine(env.DB, machineId);
+  if (!m) return json({ registered: false });
+  const { n } = await env.DB.prepare("SELECT COUNT(*) AS n FROM alerts WHERE machine_id = ? AND acknowledged = 0")
+    .bind(machineId).first();
+  return json({
+    registered: true,
+    hostname: m.hostname,
+    room: await roomLabel(env, m.subnet),
+    last_seen: m.last_seen,
+    open_alerts: n,
+    memo: m.memo || "",
+    paused_until: db.isPaused(m) ? m.paused_until : null,
+    disabled: JSON.parse(m.disabled_json),
+  });
+}
+
+async function clientMemo(request, env) {
+  const body = object(await readJson(request));
+  const memo = maxLen(optStr(body, "memo") ?? "", "memo", 500).trim();
+  if (!(await db.setMemo(env.DB, reqStr(body, "machine_id"), memo))) throw new HttpError(404, "unknown machine");
+  return json({ ok: true });
+}
+
+async function clientTestAlert(request, env, ctx) {
+  const body = object(await readJson(request));
+  const machineId = reqStr(body, "machine_id");
+  const extra = maxLen(optStr(body, "message") ?? "", "message", 200).trim();
+  const m = await requireMachine(env, machineId);
+  // 연속으로 누르면 알림이 쏟아지지 않도록 막습니다.
+  const recent = await env.DB.prepare("SELECT 1 FROM alerts WHERE machine_id = ? AND severity = 'test' AND created_at > ?")
+    .bind(machineId, db.now(new Date(Date.now() - TEST_ALERT_INTERVAL_MS))).first();
+  if (recent) throw new HttpError(429, "test alert sent too recently");
+  const message = `[테스트] 도난 알림 테스트${extra ? `: ${extra}` : ""}`;
+  await db.addAlert(env.DB, machineId, "test", message).run();
+  ctx.waitUntil(notify(env, `🧪 [테스트] ${await roomLabel(env, m.subnet)} ${m.hostname} 도난 알림`, message, `/#pc=${machineId}`));
+  return json({ ok: true });
+}
+
+/** 점검·수리 중인 PC의 서버 알림을 잠시 멈추고, PC에서 끈 기능을 기록합니다. */
+async function disable(request, env, machineId) {
+  const body = object(await readJson(request));
+  const hours = body.hours ?? 0;
+  if (typeof hours !== "number" || !(hours >= 0 && hours <= 24 * 30)) throw new HttpError(422, "hours must be between 0 and 720");
+  const reason = maxLen(optStr(body, "reason") ?? "", "reason", 200).trim();
+  const disabled = list(body.disabled);
+  const unknown = disabled.filter((f) => !DISABLE_FEATURES.has(f));
+  if (unknown.length) throw new HttpError(422, `unknown features: ${JSON.stringify(unknown.sort())}`);
+  const until = hours > 0 ? db.now(new Date(Date.now() + hours * 3600 * 1000)) : null;
+  if (!(await db.setDisabled(env.DB, machineId, until, reason, [...new Set(disabled)].sort()))) {
+    throw new HttpError(404, "unknown machine");
+  }
+  return json({ ok: true, paused_until: until });
+}
+
+// ---- 대시보드 ----
+
 function machineStatus(row, openAlerts, since) {
   if (openAlerts.some((a) => a.severity === "high")) return "danger";
+  if (db.isPaused(row)) return "paused";
   if (row.last_seen < since) return "offline";
   if (openAlerts.length) return "warning";
   return "ok";
@@ -196,6 +277,8 @@ async function dashboard(env) {
       last_seen: m.last_seen,
       status: machineStatus(m, alerts, since),
       open_alerts: alerts.length,
+      memo: m.memo,
+      disabled: JSON.parse(m.disabled_json),
     });
   }
 
@@ -235,6 +318,11 @@ async function machineDetail(env, machineId) {
     remote_ip: m.remote_ip,
     first_seen: m.first_seen,
     last_seen: m.last_seen,
+    memo: m.memo,
+    memo_updated_at: m.memo_updated_at,
+    paused_until: db.isPaused(m) ? m.paused_until : null,
+    pause_reason: m.pause_reason,
+    disabled: JSON.parse(m.disabled_json),
     report: current,
     findings: compare(JSON.parse(m.baseline_json), current),
     alerts,
@@ -258,8 +346,10 @@ export async function checkOverdue(env) {
     env.DB,
     "SELECT m.machine_id, m.hostname, m.last_seen, COALESCE(r.name, m.subnet, '미분류') AS room"
     + " FROM machines m LEFT JOIN rooms r ON r.subnet = m.subnet"
-    + " WHERE m.last_seen < ? AND m.overdue_alerted = 0",
+    + " WHERE m.last_seen < ? AND m.overdue_alerted = 0"
+    + " AND (m.paused_until IS NULL OR m.paused_until <= ?)",
     cutoff(overdueDays),
+    db.now(),
   );
   if (!rows.length) return [];
   const message = (r) => `${overdueDays}일 이상 보고 없음 (마지막 보고 ${r.last_seen.slice(0, 10)})`;
@@ -294,6 +384,13 @@ async function route(request, env, ctx) {
 
   if (method === "POST" && path === "/api/report") return report(request, env, ctx);
 
+  if (path.startsWith("/api/client/")) {
+    await checkKey(env.PCGUARD_API_KEY, request.headers.get("X-Api-Key"));
+    if (method === "GET" && path === "/api/client/status") return clientStatus(env, url.searchParams.get("machine_id"));
+    if (method === "POST" && path === "/api/client/memo") return clientMemo(request, env);
+    if (method === "POST" && path === "/api/client/test-alert") return clientTestAlert(request, env, ctx);
+  }
+
   if (method === "GET" && path === "/api/dashboard") {
     await admin();
     return dashboard(env);
@@ -311,6 +408,10 @@ async function route(request, env, ctx) {
     await admin();
     if (!(await db.acceptBaseline(env.DB, decodeURIComponent(m[1])))) throw new HttpError(404, "unknown machine");
     return json({ ok: true });
+  }
+  if (method === "POST" && (m = path.match(/^\/api\/machines\/([^/]+)\/disable$/))) {
+    await admin();
+    return disable(request, env, decodeURIComponent(m[1]));
   }
   if (method === "GET" && path === "/api/alerts") {
     await admin();

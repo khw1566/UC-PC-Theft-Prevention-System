@@ -5,6 +5,10 @@ export function now(date = new Date()) {
   return date.toISOString().replace(/\.\d{3}Z$/, "+00:00");
 }
 
+export function isPaused(machine) {
+  return Boolean(machine.paused_until) && machine.paused_until > now();
+}
+
 export function getMachine(db, machineId) {
   return db.prepare("SELECT * FROM machines WHERE machine_id = ?").bind(machineId).first();
 }
@@ -37,6 +41,18 @@ export async function acceptBaseline(db, machineId) {
       "UPDATE alerts SET acknowledged = 1 WHERE machine_id = ? AND EXISTS (SELECT 1 FROM machines WHERE machine_id = ?)",
     ).bind(machineId, machineId),
   ]);
+  return res.meta.changes > 0;
+}
+
+export async function setMemo(db, machineId, memo) {
+  const res = await db.prepare("UPDATE machines SET memo = ?, memo_updated_at = ? WHERE machine_id = ?")
+    .bind(memo || null, memo ? now() : null, machineId).run();
+  return res.meta.changes > 0;
+}
+
+export async function setDisabled(db, machineId, pausedUntil, reason, disabled) {
+  const res = await db.prepare("UPDATE machines SET paused_until = ?, pause_reason = ?, disabled_json = ? WHERE machine_id = ?")
+    .bind(pausedUntil, reason || null, JSON.stringify(disabled), machineId).run();
   return res.meta.changes > 0;
 }
 

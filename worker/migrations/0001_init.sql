@@ -9,7 +9,12 @@ CREATE TABLE IF NOT EXISTS machines (
     overdue_alerted  INTEGER NOT NULL DEFAULT 0,
     subnet           TEXT,
     remote_ip        TEXT,
-    offsite_alerted  INTEGER NOT NULL DEFAULT 0
+    offsite_alerted  INTEGER NOT NULL DEFAULT 0,
+    memo             TEXT,
+    memo_updated_at  TEXT,
+    paused_until     TEXT,
+    pause_reason     TEXT,
+    disabled_json    TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS alerts (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
