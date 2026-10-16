@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>PCGuard</title>
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="PCGuard">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <section id="login" class="login" hidden>
+    <form id="login-form" class="login-card">
+      <img src="/static/icon.svg" alt="" width="56" height="56">
+      <h1>PCGuard</h1>
+      <p>학교 PC 도난 감시 대시보드</p>
+      <input id="login-key" type="password" placeholder="관리자 키" autocomplete="current-password" required>
+      <button type="submit" class="btn primary">들어가기</button>
+      <p id="login-error" class="error" hidden>키가 맞지 않아요.</p>
+    </form>
+  </section>
+
+  <main id="app" hidden>
+    <header class="top">
+      <div class="brand"><img src="/static/icon.svg" alt="" width="28" height="28"><span>PCGuard</span></div>
+      <div class="top-actions">
+        <button id="push-btn" class="btn small" type="button">🔔 알림 켜기</button>
+        <button id="logout-btn" class="btn small ghost" type="button">로그아웃</button>
+      </div>
+    </header>
+    <p id="push-hint" class="hint" hidden></p>
+
+    <nav class="summary" id="summary"></nav>
+
+    <section id="alerts-section" class="panel" hidden>
+      <h2>확인할 알림 <span id="alert-count" class="count"></span></h2>
+      <ul id="alerts" class="alerts"></ul>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>호실별 PC</h2>
+        <span id="updated" class="muted"></span>
+      </div>
+      <div id="rooms" class="rooms"></div>
+      <p id="empty" class="muted empty" hidden>아직 보고한 PC가 없어요. 학교 PC에 클라이언트를 설치하면 여기에 나타나요.</p>
+    </section>
+  </main>
+
+  <dialog id="pc-dialog">
+    <div class="dialog-head">
+      <h3 id="pc-title"></h3>
+      <button class="btn small ghost" type="button" data-close aria-label="닫기">✕</button>
+    </div>
+    <div id="pc-body"></div>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

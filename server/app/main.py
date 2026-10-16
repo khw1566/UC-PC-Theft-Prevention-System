@@ -1,13 +1,21 @@
 import hashlib
 import hmac
 import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import db, notify
+from . import db
 from .compare import compare
 from .config import Settings, load_settings
+from .net import primary_subnet
+from .notify import Notifier, public_key_b64
+
+STATIC = Path(__file__).parent / "static"
 
 
 class Component(BaseModel):
@@ -15,6 +23,13 @@ class Component(BaseModel):
     key: str | None = None
     model: str | None = None
     detail: str | None = None
+
+
+class NetEntry(BaseModel):
+    mac: str | None = None
+    ip: str
+    mask: str | None = None
+    gateway: str | None = None
 
 
 class Report(BaseModel):
@@ -27,14 +42,33 @@ class Report(BaseModel):
     product: str | None = None
     os: str | None = None
     components: list[Component] = []
+    network: list[NetEntry] = []
     client_version: str | None = None
+
+
+class RoomName(BaseModel):
+    subnet: str
+    name: str
+
+
+class PushSubscription(BaseModel):
+    endpoint: str
+    keys: dict[str, str]
+
+
+def client_ip(request: Request) -> str | None:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else None
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
     conn = db.connect(settings.db_path)
+    notifier = Notifier(settings, conn)
     app = FastAPI(title="PCGuard")
-    app.state.settings, app.state.conn = settings, conn
+    app.state.settings, app.state.conn, app.state.notifier = settings, conn, notifier
 
     def check_key(expected: str, given: str | None) -> None:
         if not expected or not given or not hmac.compare_digest(expected, given):
@@ -46,33 +80,126 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def admin_auth(x_admin_key: str | None = Header(default=None)) -> None:
         check_key(settings.admin_key, x_admin_key)
 
+    # ---- 클라이언트 보고 ----
+
     @app.post("/api/report", dependencies=[Depends(client_auth)])
-    def report(body: Report):
+    def report(body: Report, request: Request):
         data = body.model_dump()
+        remote_ip = client_ip(request)
+        subnet = primary_subnet(data, remote_ip)
         machine = db.get_machine(conn, body.machine_id)
         with conn:
             if machine is None:
-                db.insert_machine(conn, data)
+                db.insert_machine(conn, data, subnet, remote_ip)
                 return {"status": "registered", "alerts": []}
 
             findings = compare(json.loads(machine["baseline_json"]), data)
             alerts = [f for f in findings if f.severity != "info"]
             sig = hashlib.sha256("\n".join(f.message for f in findings).encode()).hexdigest() if findings else None
+            notify_now = bool(alerts) and sig != machine["last_alert_sig"]
 
             # 같은 변경이 매주 반복 보고돼도 알림은 처음 한 번만 보냅니다.
-            if alerts and sig != machine["last_alert_sig"]:
+            if notify_now:
                 for f in alerts:
                     db.add_alert(conn, body.machine_id, f.severity, f.message)
-                lines = "\n".join(f"- [{f.severity}] {f.message}" for f in alerts)
-                notify.send(settings.webhook_url, f"🚨 {body.hostname} ({body.machine_id}) 하드웨어 변경 감지\n{lines}")
-            db.update_last_report(conn, data, sig)
+            db.update_last_report(conn, data, sig, subnet, remote_ip)
 
+        if notify_now:
+            room = room_label(subnet)
+            notifier.send(
+                f"🚨 {room} {body.hostname} 이상 감지",
+                "\n".join(f.message for f in alerts),
+                f"/#pc={body.machine_id}",
+            )
         return {"status": "alert" if alerts else "ok", "alerts": [f.message for f in alerts]}
+
+    # ---- 대시보드 ----
+
+    def room_label(subnet: str | None) -> str:
+        if not subnet:
+            return "미분류"
+        row = conn.execute("SELECT name FROM rooms WHERE subnet = ?", (subnet,)).fetchone()
+        return row["name"] if row else subnet
+
+    def machine_status(row, open_alerts: list[dict], cutoff: str) -> str:
+        if any(a["severity"] == "high" for a in open_alerts):
+            return "danger"
+        if row["last_seen"] < cutoff:
+            return "offline"
+        if open_alerts:
+            return "warning"
+        return "ok"
+
+    @app.get("/api/dashboard", dependencies=[Depends(admin_auth)])
+    def dashboard():
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=settings.overdue_days)).isoformat(timespec="seconds")
+        names = {r["subnet"]: r["name"] for r in conn.execute("SELECT * FROM rooms")}
+        open_alerts: dict[str, list[dict]] = {}
+        for a in conn.execute("SELECT * FROM alerts WHERE acknowledged = 0 ORDER BY id DESC"):
+            open_alerts.setdefault(a["machine_id"], []).append(dict(a))
+
+        rooms: dict[str, dict] = {}
+        for subnet, name in names.items():
+            rooms[subnet] = {"subnet": subnet, "name": name, "machines": []}
+        for m in conn.execute("SELECT * FROM machines ORDER BY hostname"):
+            subnet = m["subnet"] or ""
+            room = rooms.setdefault(subnet, {"subnet": subnet, "name": names.get(subnet), "machines": []})
+            report = json.loads(m["last_report_json"])
+            ip = next((n["ip"] for n in report.get("network") or [] if n.get("gateway")), m["remote_ip"])
+            alerts = open_alerts.get(m["machine_id"], [])
+            room["machines"].append({
+                "machine_id": m["machine_id"],
+                "hostname": m["hostname"],
+                "ip": ip,
+                "last_seen": m["last_seen"],
+                "status": machine_status(m, alerts, cutoff),
+                "open_alerts": len(alerts),
+            })
+
+        ordered = sorted(rooms.values(), key=lambda r: (r["subnet"] == "", r["name"] is None, r["name"] or "", r["subnet"]))
+        machine_rooms = {m["machine_id"]: r for r in ordered for m in r["machines"]}
+        alert_list = []
+        for mid, items in open_alerts.items():
+            room = machine_rooms.get(mid)
+            host = next((m["hostname"] for m in (room or {}).get("machines", []) if m["machine_id"] == mid), mid)
+            for a in items:
+                alert_list.append({**a, "hostname": host, "room": (room or {}).get("name") or (room or {}).get("subnet")})
+        alert_list.sort(key=lambda a: a["id"], reverse=True)
+
+        return {"rooms": ordered, "alerts": alert_list, "overdue_days": settings.overdue_days, "now": db.now()}
 
     @app.get("/api/machines", dependencies=[Depends(admin_auth)])
     def machines():
-        rows = conn.execute("SELECT machine_id, hostname, first_seen, last_seen FROM machines ORDER BY hostname")
+        rows = conn.execute("SELECT machine_id, hostname, subnet, first_seen, last_seen FROM machines ORDER BY hostname")
         return [dict(r) for r in rows]
+
+    @app.get("/api/machines/{machine_id}", dependencies=[Depends(admin_auth)])
+    def machine_detail(machine_id: str):
+        m = db.get_machine(conn, machine_id)
+        if m is None:
+            raise HTTPException(status_code=404, detail="unknown machine")
+        alerts = conn.execute("SELECT * FROM alerts WHERE machine_id = ? ORDER BY id DESC LIMIT 50", (machine_id,))
+        baseline, current = json.loads(m["baseline_json"]), json.loads(m["last_report_json"])
+        return {
+            "machine_id": machine_id,
+            "hostname": m["hostname"],
+            "room": room_label(m["subnet"]),
+            "subnet": m["subnet"],
+            "remote_ip": m["remote_ip"],
+            "first_seen": m["first_seen"],
+            "last_seen": m["last_seen"],
+            "report": current,
+            "findings": [f.__dict__ for f in compare(baseline, current)],
+            "alerts": [dict(a) for a in alerts],
+        }
+
+    @app.post("/api/machines/{machine_id}/accept", dependencies=[Depends(admin_auth)])
+    def accept(machine_id: str):
+        """부품을 정상적으로 교체/이동했을 때 현재 구성을 새 기준으로 삼고 열린 알림을 닫습니다."""
+        with conn:
+            if not db.accept_baseline(conn, machine_id):
+                raise HTTPException(status_code=404, detail="unknown machine")
+        return {"ok": True}
 
     @app.get("/api/alerts", dependencies=[Depends(admin_auth)])
     def alerts(include_acknowledged: bool = False):
@@ -85,12 +212,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             conn.execute("UPDATE alerts SET acknowledged = 1 WHERE id = ?", (alert_id,))
         return {"ok": True}
 
-    @app.post("/api/machines/{machine_id}/accept", dependencies=[Depends(admin_auth)])
-    def accept(machine_id: str):
-        """부품을 정상적으로 교체/업그레이드했을 때 현재 구성을 새 기준으로 삼습니다."""
+    @app.post("/api/rooms", dependencies=[Depends(admin_auth)])
+    def name_room(body: RoomName):
         with conn:
-            if not db.accept_baseline(conn, machine_id):
-                raise HTTPException(status_code=404, detail="unknown machine")
+            db.set_room_name(conn, body.subnet, body.name.strip())
         return {"ok": True}
 
+    # ---- 웹 푸시 ----
+
+    @app.get("/api/push/key")
+    def push_key():
+        return {"public_key": public_key_b64(notifier.vapid)}
+
+    @app.post("/api/push/subscribe", dependencies=[Depends(admin_auth)])
+    def subscribe(sub: PushSubscription):
+        with conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO push_subscriptions (endpoint, data_json, created_at) VALUES (?, ?, ?)",
+                (sub.endpoint, sub.model_dump_json(), db.now()),
+            )
+        return {"ok": True}
+
+    @app.post("/api/push/test", dependencies=[Depends(admin_auth)])
+    def push_test():
+        notifier.send("✅ PCGuard 알림 테스트", "이 기기에서 알림을 받을 수 있어요.")
+        return {"ok": True}
+
+    # ---- 정적 파일 (PWA) ----
+
+    @app.get("/", include_in_schema=False)
+    def index():
+        return FileResponse(STATIC / "index.html")
+
+    @app.get("/sw.js", include_in_schema=False)
+    def service_worker():
+        # 서비스 워커는 사이트 전체(/)를 다루도록 루트에서 제공해야 합니다.
+        return FileResponse(STATIC / "sw.js", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/manifest.webmanifest", include_in_schema=False)
+    def manifest():
+        return FileResponse(STATIC / "manifest.webmanifest", media_type="application/manifest+json")
+
+    app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app

@@ -73,6 +73,19 @@ function Get-HardwareReport {
         }
     }
 
+    # 호실(망) 구분용: 활성 어댑터의 IPv4 주소, 서브넷 마스크, 게이트웨이
+    $network = @()
+    foreach ($cfg in Get-CimInstance Win32_NetworkAdapterConfiguration -Filter 'IPEnabled = TRUE') {
+        for ($i = 0; $i -lt @($cfg.IPAddress).Count; $i++) {
+            $ip = @($cfg.IPAddress)[$i]
+            if ($ip -notmatch '^\d+\.\d+\.\d+\.\d+$' -or $ip -like '169.254.*') { continue }
+            $network += [ordered]@{
+                mac = $cfg.MACAddress; ip = $ip; mask = @($cfg.IPSubnet)[$i]
+                gateway = (@($cfg.DefaultIPGateway) | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' } | Select-Object -First 1)
+            }
+        }
+    }
+
     [ordered]@{
         machine_id    = (Clean $product.UUID)
         hostname      = $env:COMPUTERNAME
@@ -83,7 +96,8 @@ function Get-HardwareReport {
         product       = (Clean $product.Name)
         os            = "$($os.Caption) $($os.Version)"
         components    = $components
-        client_version = '0.1.0'
+        network       = $network
+        client_version = '0.2.0'
     }
 }
 

@@ -3,6 +3,8 @@
 from collections import Counter
 from dataclasses import dataclass
 
+from .net import primary_subnet
+
 # 빠지면 도난으로 볼 부품과 그 심각도
 REMOVAL_SEVERITY = {"cpu": "high", "ram": "high", "disk": "high", "gpu": "high", "nic": "medium"}
 KIND_LABEL = {"cpu": "CPU", "ram": "메모리", "disk": "저장장치", "gpu": "그래픽카드", "nic": "네트워크카드"}
@@ -35,6 +37,11 @@ def compare(baseline: dict, current: dict) -> list[Finding]:
         before, after = baseline.get(field), current.get(field)
         if before and before != after:
             findings.append(Finding("high", f"{label} 변경: {before} → {after or '없음'}"))
+
+    # 다른 호실(망)로 옮겨졌다면 반출 가능성이 있으므로 알립니다.
+    before_net, after_net = primary_subnet(baseline), primary_subnet(current)
+    if before_net and after_net and before_net != after_net:
+        findings.append(Finding("medium", f"네트워크(호실) 변경: {before_net} → {after_net}"))
 
     base_items = {_identity(c): c for c in baseline.get("components", [])}
     curr_items = {_identity(c): c for c in current.get("components", [])}
