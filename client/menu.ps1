@@ -8,7 +8,10 @@
     기능 비활성화는 서버가 관리자 키를 확인한 뒤에만 적용됩니다.
 #>
 [CmdletBinding()]
-param([string]$ConfigPath = (Join-Path $PSScriptRoot 'config.json'))
+param([string]$ConfigPath)
+
+# Windows PowerShell 5.1은 -File로 실행할 때 param 기본값 안에서 $PSScriptRoot가 비어 있습니다.
+if (-not $ConfigPath) { $ConfigPath = Join-Path $PSScriptRoot 'config.json' }
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {

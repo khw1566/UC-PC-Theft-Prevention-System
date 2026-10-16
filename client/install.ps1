@@ -37,13 +37,17 @@ if (-not $ServerUrl -or -not $ApiKey) {
 }
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-Copy-Item (Join-Path $PSScriptRoot 'collect.ps1'), (Join-Path $PSScriptRoot 'menu.ps1') $InstallDir -Force
+'collect.ps1', 'menu.ps1', 'tray.ps1' | ForEach-Object { Copy-Item (Join-Path $PSScriptRoot $_) $InstallDir -Force }
 
 [ordered]@{ server_url = $ServerUrl; api_key = $ApiKey } |
     ConvertTo-Json | Set-Content -Path (Join-Path $InstallDir 'config.json') -Encoding UTF8
 
 # 학생 계정이 키를 읽거나 스크립트를 바꾸지 못하도록 관리자/SYSTEM만 접근하게 합니다.
-icacls $InstallDir /inheritance:r /grant:r 'SYSTEM:(OI)(CI)F' 'Administrators:(OI)(CI)F' | Out-Null
+# 언어별 계정 이름 차이를 피하려고 SID를 씁니다 (S-1-5-18 SYSTEM, S-1-5-32-544 Administrators).
+icacls $InstallDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+# 작업표시줄 아이콘은 로그인한 사용자 권한으로 돌기 때문에 tray.ps1만 읽을 수 있게 합니다 (S-1-5-32-545 Users).
+icacls (Join-Path $InstallDir 'tray.ps1') /grant '*S-1-5-32-545:RX' | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $env:ProgramData 'PCGuard') | Out-Null
 
 $script = Join-Path $InstallDir 'collect.ps1'
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
@@ -73,8 +77,29 @@ $bytes = [IO.File]::ReadAllBytes($shortcut)
 $bytes[0x15] = $bytes[0x15] -bor 0x20   # '관리자 권한으로 실행' 플래그
 [IO.File]::WriteAllBytes($shortcut, $bytes)
 
+# 작업표시줄 알림 영역 아이콘: 모든 사용자가 로그인할 때 시작합니다.
+$trayLnk = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\StartUp\PCGuard.lnk'
+$lnk = (New-Object -ComObject WScript.Shell).CreateShortcut($trayLnk)
+$lnk.TargetPath = 'powershell.exe'
+$lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$(Join-Path $InstallDir 'tray.ps1')`""
+$lnk.IconLocation = 'imageres.dll,-1028'
+$lnk.Save()
+
 Write-Host "설치 완료: $InstallDir"
 Write-Host "시작 메뉴에 'PCGuard 관리 메뉴'를 만들었어요 (테스트 알림, 메모, 기능 끄기)."
 Write-Host "작업 '$TaskName' 등록됨 (부팅 시 + 매주 $WeeklyDay $WeeklyTime)"
 Write-Host '첫 보고를 지금 보냅니다...'
+$stateFile = Join-Path $env:ProgramData 'PCGuard\state.json'
+Remove-Item $stateFile -ErrorAction SilentlyContinue
 Start-ScheduledTask -TaskName $TaskName
+for ($i = 0; $i -lt 60 -and -not (Test-Path $stateFile); $i++) { Start-Sleep -Seconds 1 }
+if (Test-Path $stateFile) {
+    $state = Get-Content -Raw -Encoding UTF8 $stateFile | ConvertFrom-Json
+    if ($state.ok) { Write-Host "첫 보고 성공 ($($state.detail)). 대시보드에서 이 PC를 확인하세요." }
+    else { Write-Warning "첫 보고 실패: $($state.detail)" }
+} else {
+    Write-Warning "1분 안에 보고 결과가 없어요. $(Join-Path $env:ProgramData 'PCGuard\pcguard.log')를 확인하세요."
+}
+
+# 관리자 권한이 아닌 현재 사용자로 아이콘을 띄우려고 탐색기를 통해 바로가기를 엽니다.
+Start-Process explorer.exe "`"$trayLnk`""

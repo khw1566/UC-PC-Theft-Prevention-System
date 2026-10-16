@@ -9,9 +9,12 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$ConfigPath = (Join-Path $PSScriptRoot 'config.json'),
+    [string]$ConfigPath,
     [switch]$DryRun
 )
+
+# Windows PowerShell 5.1은 -File로 실행할 때 param 기본값 안에서 $PSScriptRoot가 비어 있습니다.
+if (-not $ConfigPath) { $ConfigPath = Join-Path $PSScriptRoot 'config.json' }
 
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -25,6 +28,22 @@ function Write-Log([string]$Message) {
     $line = '{0:yyyy-MM-dd HH:mm:ss} {1}' -f (Get-Date), $Message
     Add-Content -Path $LogFile -Value $line -Encoding UTF8
     Write-Verbose $line
+}
+
+# 작업표시줄 아이콘(tray.ps1)이 읽는 마지막 보고 상태. 관리자 키나 API 키는 넣지 않습니다.
+function Write-State([bool]$Ok, [string]$Detail) {
+    $state = [ordered]@{
+        checked_at = (Get-Date).ToString('o')
+        ok         = $Ok
+        detail     = $Detail
+        queued     = @(Get-ChildItem $QueueDir -Filter *.json -ErrorAction SilentlyContinue).Count
+    }
+    $prev = Join-Path $DataDir 'state.json'
+    if ($Ok) { $state.last_success = $state.checked_at }
+    elseif (Test-Path $prev) {
+        try { $state.last_success = (Get-Content -Raw -Encoding UTF8 $prev | ConvertFrom-Json).last_success } catch { }
+    }
+    $state | ConvertTo-Json | Set-Content -Path $prev -Encoding UTF8
 }
 
 function Clean([object]$Value) {
@@ -121,16 +140,21 @@ if ($DryRun) { $json; return }
 $queued = Join-Path $QueueDir ('{0:yyyyMMddHHmmss}.json' -f (Get-Date))
 Set-Content -Path $queued -Value $json -Encoding UTF8
 
+$sendError = $null
+$lastStatus = $null
 foreach ($file in Get-ChildItem $QueueDir -Filter *.json | Sort-Object Name) {
     try {
         $result = Send-Report (Get-Content -Raw -Encoding UTF8 $file.FullName) $config
         Remove-Item $file.FullName
+        $lastStatus = $result.status
         Write-Log "sent $($file.Name): status=$($result.status) alerts=$($result.alerts.Count)"
     } catch {
-        Write-Log "send failed for $($file.Name): $($_.Exception.Message)"
+        $sendError = $_.Exception.Message
+        Write-Log "send failed for $($file.Name): $sendError"
         break
     }
 }
+if ($sendError) { Write-State $false $sendError } else { Write-State $true "server status=$lastStatus" }
 
 # 큐가 무한히 커지지 않도록 최근 50개만 유지합니다.
 Get-ChildItem $QueueDir -Filter *.json | Sort-Object Name -Descending |

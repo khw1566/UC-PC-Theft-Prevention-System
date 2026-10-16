@@ -36,7 +36,7 @@ if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
 $client = Join-Path $root 'client'
-'collect.ps1', 'menu.ps1', 'install.ps1', 'uninstall.ps1', 'install.bat', 'uninstall.bat' |
+'collect.ps1', 'menu.ps1', 'tray.ps1', 'install.ps1', 'uninstall.ps1', 'install.bat', 'uninstall.bat' |
     ForEach-Object { Copy-Item (Join-Path $client $_) $stage }
 
 $utf8 = New-Object Text.UTF8Encoding($false)
@@ -49,6 +49,8 @@ PCGuard 학교 PC 설치 패키지
 설치: install.bat을 더블클릭하고 관리자 권한을 허용하세요.
   - C:\Program Files\PCGuard에 설치되고, 부팅 2분 후와 매주 월요일 09:00에 하드웨어 정보를 보냅니다.
   - 시작 메뉴에 'PCGuard 관리 메뉴'가 생깁니다 (상태 확인, 테스트 알림, 메모, 기능 끄기).
+  - 작업표시줄 알림 영역에 PCGuard 방패 아이콘이 뜹니다. 우클릭하면 상태 보기, 지금 보고, 관리 메뉴가 있습니다.
+    안 보이면 작업표시줄 오른쪽의 ^ 를 눌러 아이콘을 작업표시줄로 끌어다 놓으세요.
   - 요일/시간 변경은 관리자 PowerShell에서 .\install.ps1 -WeeklyDay Friday -WeeklyTime 16:00
 제거: uninstall.bat을 더블클릭하세요.
 
