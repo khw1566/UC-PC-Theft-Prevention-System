@@ -1,0 +1,14 @@
+{
+  "name": "pcguard-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test --no-warnings=ExperimentalWarning",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 migrations apply pcguard --remote"
+  },
+  "devDependencies": {
+    "wrangler": "^4.40.0"
+  }
+}

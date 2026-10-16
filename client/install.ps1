@@ -3,7 +3,7 @@
     PCGuard 클라이언트를 설치하고 작업 스케줄러에 등록합니다. 관리자 권한 PowerShell에서 실행하세요.
 
 .EXAMPLE
-    .\install.ps1 -ServerUrl https://audreaming.com -ApiKey <발급받은 키>
+    .\install.ps1 -ServerUrl https://pcguard.audreaming.com -ApiKey <발급받은 키>
 #>
 [CmdletBinding()]
 param(
