@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import db
 from .compare import Finding, compare
@@ -49,6 +49,29 @@ class Report(BaseModel):
 class RoomName(BaseModel):
     subnet: str
     name: str
+
+
+class ClientMemo(BaseModel):
+    machine_id: str
+    memo: str = Field("", max_length=500)
+
+
+class ClientTestAlert(BaseModel):
+    machine_id: str
+    message: str = Field("", max_length=200)
+
+
+# 클라이언트 메뉴에서 끌 수 있는 기능
+DISABLE_FEATURES = {"startup_report", "weekly_report"}
+
+
+class DisableRequest(BaseModel):
+    hours: float = Field(0, ge=0, le=24 * 30)  # 서버 알림 일시중지 시간, 0이면 해제
+    reason: str = Field("", max_length=200)
+    disabled: list[str] = []
+
+
+TEST_ALERT_INTERVAL = timedelta(seconds=30)
 
 
 class PushSubscription(BaseModel):
@@ -96,6 +119,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             findings = compare(json.loads(machine["baseline_json"]), data)
             alerts = [f for f in findings if f.severity != "info"]
             sig = hashlib.sha256("\n".join(f.message for f in findings).encode()).hexdigest() if findings else None
+            # 점검(일시중지) 중에는 알리지 않고, 서명도 그대로 둬서 끝난 뒤 첫 보고에서 알립니다.
+            paused = db.is_paused(machine)
+            if paused:
+                sig = machine["last_alert_sig"]
 
             # 같은 변경이 매주 반복 보고돼도 알림은 처음 한 번만 보냅니다.
             new_alerts = list(alerts) if sig != machine["last_alert_sig"] else []
@@ -106,13 +133,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if offsite:
                 finding = Finding("high", f"학교 밖 네트워크에서 켜짐 (접속 IP {remote_ip})")
                 alerts.append(finding)
-                if not machine["offsite_alerted"]:
+                if not machine["offsite_alerted"] and not paused:
                     new_alerts.append(finding)
 
             for f in new_alerts:
                 db.add_alert(conn, body.machine_id, f.severity, f.message)
             db.update_last_report(conn, data, sig, subnet, remote_ip)
-            db.set_offsite_alerted(conn, body.machine_id, offsite)
+            # 일시중지 중에 밖에 있었다면 끝난 뒤 첫 보고에서 알리도록 표시하지 않습니다.
+            db.set_offsite_alerted(conn, body.machine_id, offsite and (not paused or bool(machine["offsite_alerted"])))
 
         if new_alerts:
             room = room_label(subnet)
@@ -122,6 +150,70 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 f"/#pc={body.machine_id}",
             )
         return {"status": "alert" if alerts else "ok", "alerts": [f.message for f in alerts]}
+
+    # ---- 클라이언트 메뉴 (PC의 관리 메뉴 GUI) ----
+
+    def require_machine(machine_id: str):
+        m = db.get_machine(conn, machine_id)
+        if m is None:
+            raise HTTPException(status_code=404, detail="unknown machine")
+        return m
+
+    @app.get("/api/client/status", dependencies=[Depends(client_auth)])
+    def client_status(machine_id: str):
+        m = db.get_machine(conn, machine_id)
+        if m is None:
+            return {"registered": False}
+        open_alerts = conn.execute(
+            "SELECT COUNT(*) FROM alerts WHERE machine_id = ? AND acknowledged = 0", (machine_id,)
+        ).fetchone()[0]
+        return {
+            "registered": True,
+            "hostname": m["hostname"],
+            "room": room_label(m["subnet"]),
+            "last_seen": m["last_seen"],
+            "open_alerts": open_alerts,
+            "memo": m["memo"] or "",
+            "paused_until": m["paused_until"] if db.is_paused(m) else None,
+            "disabled": json.loads(m["disabled_json"]),
+        }
+
+    @app.post("/api/client/memo", dependencies=[Depends(client_auth)])
+    def client_memo(body: ClientMemo):
+        with conn:
+            if not db.set_memo(conn, body.machine_id, body.memo.strip()):
+                raise HTTPException(status_code=404, detail="unknown machine")
+        return {"ok": True}
+
+    @app.post("/api/client/test-alert", dependencies=[Depends(client_auth)])
+    def client_test_alert(body: ClientTestAlert):
+        m = require_machine(body.machine_id)
+        since = (datetime.now(timezone.utc) - TEST_ALERT_INTERVAL).isoformat(timespec="seconds")
+        recent = conn.execute(
+            "SELECT 1 FROM alerts WHERE machine_id = ? AND severity = 'test' AND created_at > ?",
+            (body.machine_id, since),
+        ).fetchone()
+        if recent:
+            raise HTTPException(status_code=429, detail="test alert sent too recently")
+        message = "[테스트] 도난 알림 테스트" + (f": {body.message.strip()}" if body.message.strip() else "")
+        with conn:
+            db.add_alert(conn, body.machine_id, "test", message)
+        notifier.send(f"🧪 [테스트] {room_label(m['subnet'])} {m['hostname']} 도난 알림", message, f"/#pc={body.machine_id}")
+        return {"ok": True}
+
+    @app.post("/api/machines/{machine_id}/disable", dependencies=[Depends(admin_auth)])
+    def disable(machine_id: str, body: DisableRequest):
+        """점검·수리 중인 PC의 서버 알림을 잠시 멈추고, PC에서 끈 기능을 기록합니다."""
+        unknown = set(body.disabled) - DISABLE_FEATURES
+        if unknown:
+            raise HTTPException(status_code=422, detail=f"unknown features: {sorted(unknown)}")
+        until = None
+        if body.hours > 0:
+            until = (datetime.now(timezone.utc) + timedelta(hours=body.hours)).isoformat(timespec="seconds")
+        with conn:
+            if not db.set_disabled(conn, machine_id, until, body.reason.strip(), sorted(set(body.disabled))):
+                raise HTTPException(status_code=404, detail="unknown machine")
+        return {"ok": True, "paused_until": until}
 
     # ---- 대시보드 ----
 
@@ -134,6 +226,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def machine_status(row, open_alerts: list[dict], cutoff: str) -> str:
         if any(a["severity"] == "high" for a in open_alerts):
             return "danger"
+        if db.is_paused(row):
+            return "paused"
         if row["last_seen"] < cutoff:
             return "offline"
         if open_alerts:
@@ -164,6 +258,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "last_seen": m["last_seen"],
                 "status": machine_status(m, alerts, cutoff),
                 "open_alerts": len(alerts),
+                "memo": m["memo"],
+                "disabled": json.loads(m["disabled_json"]),
             })
 
         ordered = sorted(rooms.values(), key=lambda r: (r["subnet"] == "", r["name"] is None, r["name"] or "", r["subnet"]))
@@ -198,6 +294,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "remote_ip": m["remote_ip"],
             "first_seen": m["first_seen"],
             "last_seen": m["last_seen"],
+            "memo": m["memo"],
+            "memo_updated_at": m["memo_updated_at"],
+            "paused_until": m["paused_until"] if db.is_paused(m) else None,
+            "pause_reason": m["pause_reason"],
+            "disabled": json.loads(m["disabled_json"]),
             "report": current,
             "findings": [f.__dict__ for f in compare(baseline, current)],
             "alerts": [dict(a) for a in alerts],

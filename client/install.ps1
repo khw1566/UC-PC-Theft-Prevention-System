@@ -3,7 +3,7 @@
     PCGuard 클라이언트를 설치하고 작업 스케줄러에 등록합니다. 관리자 권한 PowerShell에서 실행하세요.
 
 .EXAMPLE
-    .\install.ps1 -ServerUrl https://audreaming.com -ApiKey <발급받은 키>
+    .\install.ps1 -ServerUrl https://pcguard.audreaming.com -ApiKey <발급받은 키>
 #>
 [CmdletBinding()]
 param(
@@ -24,7 +24,7 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-Copy-Item (Join-Path $PSScriptRoot 'collect.ps1') $InstallDir -Force
+Copy-Item (Join-Path $PSScriptRoot 'collect.ps1'), (Join-Path $PSScriptRoot 'menu.ps1') $InstallDir -Force
 
 [ordered]@{ server_url = $ServerUrl; api_key = $ApiKey } |
     ConvertTo-Json | Set-Content -Path (Join-Path $InstallDir 'config.json') -Encoding UTF8
@@ -49,7 +49,19 @@ $runAs = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $atStartup, $weekly `
     -Settings $settings -Principal $runAs -Force | Out-Null
 
+# 관리 메뉴(GUI) 바로가기. 관리자 권한으로만 열리게 해서 학생 계정은 UAC에서 막힙니다.
+$shortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\PCGuard 관리 메뉴.lnk'
+$lnk = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcut)
+$lnk.TargetPath = 'powershell.exe'
+$lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$(Join-Path $InstallDir 'menu.ps1')`""
+$lnk.IconLocation = 'imageres.dll,-1028'
+$lnk.Save()
+$bytes = [IO.File]::ReadAllBytes($shortcut)
+$bytes[0x15] = $bytes[0x15] -bor 0x20   # '관리자 권한으로 실행' 플래그
+[IO.File]::WriteAllBytes($shortcut, $bytes)
+
 Write-Host "설치 완료: $InstallDir"
+Write-Host "시작 메뉴에 'PCGuard 관리 메뉴'를 만들었어요 (테스트 알림, 메모, 기능 끄기)."
 Write-Host "작업 '$TaskName' 등록됨 (부팅 시 + 매주 $WeeklyDay $WeeklyTime)"
 Write-Host '첫 보고를 지금 보냅니다...'
 Start-ScheduledTask -TaskName $TaskName

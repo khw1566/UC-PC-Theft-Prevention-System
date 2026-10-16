@@ -1,0 +1,31 @@
+# PCGuard 감시 서버 (Cloudflare Workers + D1)
+# 배포 방법은 README의 "서버 배포 (Cloudflare Workers)"를 보세요.
+name = "pcguard"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+
+# audreaming.com이 Cloudflare에 있으므로 하위 도메인을 바로 연결합니다.
+routes = [{ pattern = "pcguard.audreaming.com", custom_domain = true }]
+
+[vars]
+PCGUARD_OVERDUE_DAYS = "8"
+# 학교 공인 IP 대역 (쉼표로 구분, 비우면 학교 밖 감지 끔)
+PCGUARD_SCHOOL_NETWORKS = ""
+PCGUARD_VAPID_SUBJECT = "mailto:admin@audreaming.com"
+# 비밀값은 wrangler secret put 으로 넣습니다: PCGUARD_API_KEY, PCGUARD_ADMIN_KEY, PCGUARD_WEBHOOK_URL(선택)
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pcguard"
+database_id = "여기에-wrangler-d1-create-가-알려준-id"
+migrations_dir = "migrations"
+
+# 대시보드 화면은 기존 서버와 같은 파일을 씁니다.
+[assets]
+directory = "../server/app/static"
+binding = "ASSETS"
+run_worker_first = true
+
+# 연락 두절 PC 확인 (매일 오전 9시 KST)
+[triggers]
+crons = ["0 0 * * *"]
