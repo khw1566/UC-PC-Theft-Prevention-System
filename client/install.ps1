@@ -4,11 +4,14 @@
 
 .EXAMPLE
     .\install.ps1 -ServerUrl https://pcguard.audreaming.com -ApiKey <발급받은 키>
+
+.EXAMPLE
+    .\install.ps1    # 같은 폴더의 config.json(배포 패키지에 들어 있음)에서 주소와 키를 읽습니다.
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)] [string]$ServerUrl,
-    [Parameter(Mandatory)] [string]$ApiKey,
+    [string]$ServerUrl,
+    [string]$ApiKey,
     [string]$InstallDir = (Join-Path $env:ProgramFiles 'PCGuard'),
     [ValidateSet('Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday')]
     [string]$WeeklyDay = 'Monday',
@@ -21,6 +24,16 @@ $TaskName = 'PCGuard Hardware Check'
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw '관리자 권한으로 실행해야 합니다.'
+}
+
+$packaged = Join-Path $PSScriptRoot 'config.json'
+if ((-not $ServerUrl -or -not $ApiKey) -and (Test-Path $packaged)) {
+    $cfg = Get-Content $packaged -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not $ServerUrl) { $ServerUrl = $cfg.server_url }
+    if (-not $ApiKey) { $ApiKey = $cfg.api_key }
+}
+if (-not $ServerUrl -or -not $ApiKey) {
+    throw '-ServerUrl과 -ApiKey를 주거나 같은 폴더에 config.json을 두세요.'
 }
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null

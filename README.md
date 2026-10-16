@@ -127,6 +127,15 @@ uvicorn app.asgi:app --host 127.0.0.1 --port 8000
 
 ## 학교 PC에 설치
 
+### 배포 패키지로 설치 (권장)
+
+관리자 PC에서 `powershell -ExecutionPolicy Bypass -File tools\package.ps1 -BuildApk`를 실행하면 `dist/`에 두 파일이 생깁니다. 서버 주소와 클라이언트 키(`worker/pcguard-keys.local.txt`의 `PCGUARD_API_KEY` 또는 `-ApiKey`)가 미리 들어가고, 관리자 키는 들어가지 않습니다. `dist/`는 git에 올라가지 않습니다.
+
+- `PCGuard-Client.zip`: 학교 PC에서 압축을 풀고 `install.bat`을 더블클릭하면 관리자 권한을 요청한 뒤 설치합니다. 제거는 `uninstall.bat`.
+- `PCGuard.apk`: 관리자 휴대폰에 설치하는 앱.
+
+### 직접 설치
+
 관리자 권한 PowerShell에서:
 
 ```powershell
